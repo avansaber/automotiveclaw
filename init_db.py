@@ -15,7 +15,7 @@ DEFAULT_DB_PATH = os.path.expanduser("~/.openclaw/erpclaw/data.sqlite")
 DISPLAY_NAME = "AutomotiveClaw"
 
 REQUIRED_FOUNDATION = [
-    "company", "naming_series", "audit_log",
+    "company", "customer", "naming_series", "audit_log",
 ]
 
 
@@ -41,21 +41,15 @@ def create_automotiveclaw_tables(db_path=None):
     indexes_created = 0
 
     # ==================================================================
-    # CUSTOMERS DOMAIN
+    # CUSTOMERS DOMAIN (extension table -- core fields live in customer)
     # ==================================================================
 
-    # 1. automotiveclaw_customer
+    # 1. automotiveclaw_customer_ext
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS automotiveclaw_customer (
+        CREATE TABLE IF NOT EXISTS automotiveclaw_customer_ext (
             id              TEXT PRIMARY KEY,
-            naming_series   TEXT,
-            name            TEXT NOT NULL,
-            email           TEXT,
-            phone           TEXT,
-            address         TEXT,
-            city            TEXT,
-            state           TEXT,
-            zip_code        TEXT,
+            naming_series   TEXT DEFAULT 'ACUST-',
+            customer_id     TEXT NOT NULL REFERENCES customer(id),
             drivers_license TEXT,
             customer_type   TEXT DEFAULT 'individual'
                             CHECK(customer_type IN ('individual','business','fleet')),
@@ -67,9 +61,9 @@ def create_automotiveclaw_tables(db_path=None):
         )
     """)
     tables_created += 1
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_cust_company ON automotiveclaw_customer(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_cust_name ON automotiveclaw_customer(name)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_cust_type ON automotiveclaw_customer(customer_type)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_custext_company ON automotiveclaw_customer_ext(company_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_custext_customer ON automotiveclaw_customer_ext(customer_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_custext_type ON automotiveclaw_customer_ext(customer_type)")
     indexes_created += 3
 
     # ==================================================================
@@ -141,7 +135,7 @@ def create_automotiveclaw_tables(db_path=None):
             id              TEXT PRIMARY KEY,
             naming_series   TEXT,
             vehicle_id      TEXT REFERENCES automotiveclaw_vehicle(id),
-            customer_id     TEXT REFERENCES automotiveclaw_customer(id),
+            customer_id     TEXT REFERENCES customer(id),
             vin             TEXT,
             year            INTEGER,
             make            TEXT,
@@ -175,7 +169,7 @@ def create_automotiveclaw_tables(db_path=None):
             id              TEXT PRIMARY KEY,
             naming_series   TEXT,
             vehicle_id      TEXT REFERENCES automotiveclaw_vehicle(id),
-            customer_id     TEXT REFERENCES automotiveclaw_customer(id),
+            customer_id     TEXT REFERENCES customer(id),
             salesperson     TEXT,
             deal_type       TEXT DEFAULT 'retail'
                             CHECK(deal_type IN ('retail','lease','wholesale','fleet')),
@@ -190,6 +184,7 @@ def create_automotiveclaw_tables(db_path=None):
             deal_status     TEXT DEFAULT 'pending'
                             CHECK(deal_status IN ('pending','negotiating','submitted','approved','funded','delivered','unwound')),
             delivered_date  TEXT,
+            gl_entry_ids    TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id),
             created_at      TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
@@ -277,7 +272,7 @@ def create_automotiveclaw_tables(db_path=None):
             id              TEXT PRIMARY KEY,
             naming_series   TEXT,
             vehicle_vin     TEXT,
-            customer_id     TEXT REFERENCES automotiveclaw_customer(id),
+            customer_id     TEXT REFERENCES customer(id),
             advisor         TEXT,
             technician      TEXT,
             ro_type         TEXT DEFAULT 'customer_pay'
@@ -377,7 +372,7 @@ def create_automotiveclaw_tables(db_path=None):
         CREATE TABLE IF NOT EXISTS automotiveclaw_parts_order (
             id              TEXT PRIMARY KEY,
             naming_series   TEXT,
-            supplier        TEXT,
+            supplier_id     TEXT NOT NULL REFERENCES supplier(id),
             order_date      TEXT,
             expected_date   TEXT,
             order_status    TEXT DEFAULT 'ordered'

@@ -290,7 +290,7 @@ def add_trade_in_appraisal(conn, args):
     customer_id = getattr(args, "customer_id", None)
     if not customer_id:
         err("--customer-id is required")
-    if not conn.execute("SELECT id FROM automotiveclaw_customer WHERE id = ?", (customer_id,)).fetchone():
+    if not conn.execute("SELECT id FROM customer WHERE id = ?", (customer_id,)).fetchone():
         err(f"Customer {customer_id} not found")
 
     vin = getattr(args, "vin", None)

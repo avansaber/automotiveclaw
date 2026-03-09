@@ -45,7 +45,7 @@ from reports import ACTIONS as RPT_ACTIONS
 # Merge all domain actions into one router
 # ---------------------------------------------------------------------------
 SKILL = "automotiveclaw"
-REQUIRED_TABLES = ["company", "automotiveclaw_customer"]
+REQUIRED_TABLES = ["company", "customer", "automotiveclaw_customer_ext"]
 
 ACTIONS = {}
 ACTIONS.update(CUST_ACTIONS)
@@ -74,10 +74,6 @@ def main():
     parser.add_argument("--name")
     parser.add_argument("--email")
     parser.add_argument("--phone")
-    parser.add_argument("--address")
-    parser.add_argument("--city")
-    parser.add_argument("--state")
-    parser.add_argument("--zip-code")
     parser.add_argument("--drivers-license")
     parser.add_argument("--customer-type")
     parser.add_argument("--lead-source")
@@ -122,6 +118,13 @@ def main():
     parser.add_argument("--down-payment")
     parser.add_argument("--rebates")
     parser.add_argument("--deal-status")
+
+    # -- GL posting fields (optional, for finalize-deal) --
+    parser.add_argument("--revenue-account-id")
+    parser.add_argument("--receivable-account-id")
+    parser.add_argument("--cogs-account-id")
+    parser.add_argument("--inventory-account-id")
+    parser.add_argument("--cost-center-id")
 
     # -- Buyer order fields --
     parser.add_argument("--vehicle-price")
@@ -174,7 +177,7 @@ def main():
     parser.add_argument("--reorder-point")
     parser.add_argument("--bin-location")
     parser.add_argument("--parts-order-id")
-    parser.add_argument("--supplier")
+    parser.add_argument("--supplier-id")
     parser.add_argument("--order-date")
     parser.add_argument("--expected-date")
     parser.add_argument("--total-amount")

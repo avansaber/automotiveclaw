@@ -20,6 +20,12 @@ try:
 except ImportError:
     pass
 
+try:
+    from erpclaw_lib.gl_posting import insert_gl_entries, reverse_gl_entries
+    HAS_GL = True
+except ImportError:
+    HAS_GL = False
+
 SKILL = "automotiveclaw"
 
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -67,7 +73,7 @@ def add_deal(conn, args):
     customer_id = getattr(args, "customer_id", None)
     if not customer_id:
         err("--customer-id is required")
-    if not conn.execute("SELECT id FROM automotiveclaw_customer WHERE id = ?", (customer_id,)).fetchone():
+    if not conn.execute("SELECT id FROM customer WHERE id = ?", (customer_id,)).fetchone():
         err(f"Customer {customer_id} not found")
 
     selling_price = getattr(args, "selling_price", None)
@@ -308,13 +314,119 @@ def finalize_deal(conn, args):
             (now, data["vehicle_id"])
         )
 
+    # --- GL Posting (optional — graceful degradation) ---
+    gl_entry_ids = []
+    gl_posted = False
+    receivable_account_id = getattr(args, "receivable_account_id", None)
+    revenue_account_id = getattr(args, "revenue_account_id", None)
+    cogs_account_id = getattr(args, "cogs_account_id", None)
+    inventory_account_id = getattr(args, "inventory_account_id", None)
+    cost_center_id = getattr(args, "cost_center_id", None)
+
+    if HAS_GL and receivable_account_id and revenue_account_id:
+        selling_price = to_decimal(data.get("selling_price") or "0")
+        trade_allowance = to_decimal(data.get("trade_allowance") or "0")
+
+        # Revenue = selling_price (full amount owed by customer)
+        # If there is a trade-in, the net cash receivable is selling_price - trade_allowance,
+        # but the full selling_price is still revenue + trade-in credit
+        total_receivable = str(round_currency(selling_price))
+
+        # Revenue portion: selling_price - trade_allowance (net revenue from cash/financing)
+        # Trade allowance is essentially a payment form, so full selling_price is receivable
+        # and full selling_price is revenue. Trade-in is handled separately if needed.
+        revenue_amount = str(round_currency(selling_price))
+
+        entries = [
+            {
+                "account_id": receivable_account_id,
+                "debit": total_receivable,
+                "credit": "0",
+                "party_type": "customer",
+                "party_id": data["customer_id"],
+            },
+            {
+                "account_id": revenue_account_id,
+                "debit": "0",
+                "credit": revenue_amount,
+                "cost_center_id": cost_center_id,
+            },
+        ]
+
+        posting_date = now[:10]  # YYYY-MM-DD from ISO timestamp
+
+        try:
+            gl_ids = insert_gl_entries(
+                conn, entries,
+                voucher_type="Vehicle Sale",
+                voucher_id=deal_id,
+                posting_date=posting_date,
+                company_id=data["company_id"],
+                remarks=f"Vehicle sale deal {data.get('naming_series') or deal_id}",
+            )
+            gl_entry_ids.extend(gl_ids)
+            gl_posted = True
+        except (ValueError, Exception):
+            # GL posting failed — deal still closes, just without GL entries
+            pass
+
+        # Optional COGS entries (DR: COGS, CR: Inventory)
+        # Uses the vehicle's invoice_price as cost basis
+        if gl_posted and cogs_account_id and inventory_account_id and data.get("vehicle_id"):
+            vehicle_row = conn.execute(
+                "SELECT invoice_price FROM automotiveclaw_vehicle WHERE id = ?",
+                (data["vehicle_id"],)
+            ).fetchone()
+            if vehicle_row and vehicle_row["invoice_price"]:
+                cost_amount = str(round_currency(to_decimal(vehicle_row["invoice_price"])))
+                if to_decimal(cost_amount) > Decimal("0"):
+                    cogs_entries = [
+                        {
+                            "account_id": cogs_account_id,
+                            "debit": cost_amount,
+                            "credit": "0",
+                            "cost_center_id": cost_center_id,
+                        },
+                        {
+                            "account_id": inventory_account_id,
+                            "debit": "0",
+                            "credit": cost_amount,
+                        },
+                    ]
+                    try:
+                        cogs_ids = insert_gl_entries(
+                            conn, cogs_entries,
+                            voucher_type="Vehicle Sale",
+                            voucher_id=deal_id,
+                            posting_date=posting_date,
+                            company_id=data["company_id"],
+                            remarks=f"COGS for vehicle sale {data.get('naming_series') or deal_id}",
+                            entry_set="cogs",
+                        )
+                        gl_entry_ids.extend(cogs_ids)
+                    except (ValueError, Exception):
+                        # COGS posting failed — revenue GL still stands
+                        pass
+
+    # Store GL entry IDs on the deal
+    if gl_entry_ids:
+        conn.execute(
+            "UPDATE automotiveclaw_deal SET gl_entry_ids = ? WHERE id = ?",
+            (",".join(gl_entry_ids), deal_id)
+        )
+
     audit(conn, SKILL, "auto-finalize-deal", "automotiveclaw_deal", deal_id,
-          new_values={"deal_status": "delivered", "total_gross": total_gross})
+          new_values={"deal_status": "delivered", "total_gross": total_gross,
+                      "gl_posted": gl_posted, "gl_entry_count": len(gl_entry_ids)})
     conn.commit()
-    ok({
+    result = {
         "id": deal_id, "deal_status": "delivered",
         "front_gross": front_gross, "back_gross": back_gross, "total_gross": total_gross,
-    })
+    }
+    if gl_posted:
+        result["gl_posted"] = True
+        result["gl_entry_ids"] = gl_entry_ids
+    ok(result)
 
 
 # ===========================================================================
@@ -345,10 +457,38 @@ def unwind_deal(conn, args):
             (now, data["vehicle_id"])
         )
 
+    # Reverse GL entries if any were posted
+    gl_reversed = False
+    reversal_ids = []
+    if HAS_GL and data.get("gl_entry_ids"):
+        posting_date = now[:10]
+        try:
+            rev_ids = reverse_gl_entries(
+                conn,
+                voucher_type="Vehicle Sale",
+                voucher_id=deal_id,
+                posting_date=posting_date,
+            )
+            reversal_ids.extend(rev_ids)
+            gl_reversed = True
+        except (ValueError, Exception):
+            # GL reversal failed — deal still unwinds
+            pass
+
+        # Clear GL entry IDs on the deal
+        conn.execute(
+            "UPDATE automotiveclaw_deal SET gl_entry_ids = NULL WHERE id = ?",
+            (deal_id,)
+        )
+
     audit(conn, SKILL, "auto-unwind-deal", "automotiveclaw_deal", deal_id,
-          new_values={"deal_status": "unwound"})
+          new_values={"deal_status": "unwound", "gl_reversed": gl_reversed})
     conn.commit()
-    ok({"id": deal_id, "deal_status": "unwound"})
+    result = {"id": deal_id, "deal_status": "unwound"}
+    if gl_reversed:
+        result["gl_reversed"] = True
+        result["reversal_entry_ids"] = reversal_ids
+    ok(result)
 
 
 # ===========================================================================

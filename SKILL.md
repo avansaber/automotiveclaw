@@ -2,12 +2,12 @@
 name: automotiveclaw
 version: 1.0.0
 description: AI-native automotive dealership management. 70 actions across 8 domains -- inventory, deals, F&I, service, parts, customers, compliance, reports. Built on ERPClaw foundation with full deal lifecycle, F&I product tracking, repair orders, parts management, and dealer compliance.
-author: AvanSaber / Nikhil Jathar
-homepage: https://www.automotiveclaw.ai
+author: AvanSaber
+homepage: https://github.com/avansaber/automotiveclaw
 source: https://github.com/avansaber/automotiveclaw
 tier: 4
 category: automotive
-requires: [erpclaw-setup]
+requires: [erpclaw]
 database: ~/.openclaw/erpclaw/data.sqlite
 user-invocable: true
 tags: [automotiveclaw, automotive, dealership, vehicle, inventory, deal, fi, finance, insurance, service, repair, parts, compliance, vin, trade-in, buyer-order, warranty]
@@ -27,7 +27,7 @@ You manage the full dealership workflow: vehicle inventory (new/used/CPO), custo
 
 - **Local-only**: All data stored in `~/.openclaw/erpclaw/data.sqlite`
 - **Zero network calls**: No external API calls, no telemetry, no cloud dependencies
-- **No credentials required**: Uses erpclaw_lib shared library (installed by erpclaw-setup)
+- **No credentials required**: Uses erpclaw_lib shared library (installed by erpclaw)
 - **SQL injection safe**: All queries use parameterized statements
 
 ### Skill Activation Triggers
@@ -39,7 +39,7 @@ inventory aging, gross profit, salesperson performance, lot, stock number.
 ### Setup (First Use Only)
 
 ```
-python3 {baseDir}/../erpclaw-setup/scripts/db_query.py --action initialize-database
+python3 {baseDir}/../erpclaw/scripts/erpclaw-setup/db_query.py --action initialize-database
 python3 {baseDir}/init_db.py
 python3 {baseDir}/scripts/db_query.py --action status
 ```
@@ -74,8 +74,8 @@ For all actions: `python3 {baseDir}/scripts/db_query.py --action <action> [flags
 ### Customers (6 actions)
 | Action | Required Flags | Optional Flags |
 |--------|---------------|----------------|
-| `auto-add-customer` | `--company-id --name` | `--email --phone --address --city --state --zip-code --drivers-license --customer-type --lead-source` |
-| `auto-update-customer` | `--customer-id` | `--name --email --phone --address --city --state --zip-code --customer-type` |
+| `auto-add-customer` | `--company-id --name` | `--email --phone --drivers-license --customer-type --lead-source` |
+| `auto-update-customer` | `--customer-id` | `--name --email --phone --customer-type --drivers-license --lead-source` |
 | `auto-get-customer` | `--customer-id` | |
 | `auto-list-customers` | | `--company-id --search --customer-type --limit --offset` |
 | `auto-customer-vehicle-history` | `--customer-id` | `--limit --offset` |
@@ -148,7 +148,7 @@ For all actions: `python3 {baseDir}/scripts/db_query.py --action <action> [flags
 | `auto-update-part` | `--part-id` | `--description --list-price --cost --quantity-on-hand --reorder-point --bin-location` |
 | `auto-get-part` | `--part-id` | |
 | `auto-list-parts` | | `--company-id --search --limit --offset` |
-| `auto-add-parts-order` | `--company-id --supplier` | `--order-date --expected-date --total-amount` |
+| `auto-add-parts-order` | `--company-id --supplier-id` | `--order-date --expected-date --total-amount` |
 | `auto-receive-parts-order` | `--parts-order-id` | |
 | `auto-parts-velocity-report` | `--company-id` | `--limit --offset` |
 | `auto-parts-inventory-value` | `--company-id` | |
@@ -175,7 +175,7 @@ For all actions: `python3 {baseDir}/scripts/db_query.py --action <action> [flags
 
 ## Technical Details (Tier 3)
 
-**Tables owned (14):** automotiveclaw_customer, automotiveclaw_vehicle, automotiveclaw_vehicle_photo, automotiveclaw_trade_in, automotiveclaw_deal, automotiveclaw_buyer_order, automotiveclaw_fi_product, automotiveclaw_deal_fi_product, automotiveclaw_repair_order, automotiveclaw_service_line, automotiveclaw_warranty_claim, automotiveclaw_part, automotiveclaw_parts_order, automotiveclaw_compliance_check
+**Tables owned (14):** automotiveclaw_customer_ext (extends core customer), automotiveclaw_vehicle, automotiveclaw_vehicle_photo, automotiveclaw_trade_in, automotiveclaw_deal, automotiveclaw_buyer_order, automotiveclaw_fi_product, automotiveclaw_deal_fi_product, automotiveclaw_repair_order, automotiveclaw_service_line, automotiveclaw_warranty_claim, automotiveclaw_part, automotiveclaw_parts_order, automotiveclaw_compliance_check
 
 **Script:** `scripts/db_query.py` routes to 8 domain modules: customers.py, inventory.py, deals.py, fi.py, service.py, parts.py, compliance.py, reports.py
 

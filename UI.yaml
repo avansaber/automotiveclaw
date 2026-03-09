@@ -1,0 +1,128 @@
+ocui_version: "1.0"
+skill: automotiveclaw
+skill_version: "1.0.0"
+display_name: Automotive Dealership
+icon: car
+color: "#1e40af"
+default_entity: vehicle
+
+domains:
+  - key: customers
+    label: Customers
+    entities: [customer]
+  - key: inventory
+    label: Inventory
+    entities: [vehicle, vehicle_photo, trade_in]
+  - key: deals
+    label: Deals
+    entities: [deal, buyer_order]
+  - key: fi
+    label: F&I
+    entities: [fi_product, deal_fi_product]
+  - key: service
+    label: Service
+    entities: [repair_order, service_line, warranty_claim]
+  - key: parts
+    label: Parts
+    entities: [part, parts_order]
+  - key: compliance
+    label: Compliance
+    entities: [compliance_check]
+
+dashboard:
+  kpis:
+    - key: total_vehicles
+      label: "Vehicles"
+      type: count
+      action: auto-list-vehicles
+      icon: car
+      drill_action: auto-list-vehicles
+    - key: available_vehicles
+      label: "Available"
+      type: count
+      action: auto-list-vehicles
+      filter: { vehicle-status: available }
+      severity: success
+      icon: car
+      drill_action: auto-list-vehicles
+      drill_filter: { vehicle-status: available }
+    - key: open_deals
+      label: "Open Deals"
+      type: count
+      action: auto-list-deals
+      filter: { deal-status: negotiation }
+      severity: warning
+      icon: handshake
+      drill_action: auto-list-deals
+      drill_filter: { deal-status: negotiation }
+    - key: open_repair_orders
+      label: "Open ROs"
+      type: count
+      action: auto-list-repair-orders
+      filter: { ro-status: open }
+      severity: warning
+      icon: wrench
+      drill_action: auto-list-repair-orders
+      drill_filter: { ro-status: open }
+    - key: total_customers
+      label: "Customers"
+      type: count
+      action: auto-list-customers
+      icon: users
+      drill_action: auto-list-customers
+  quick_actions:
+    - action: auto-add-vehicle
+      label: "New Vehicle"
+      icon: car
+    - action: auto-add-customer
+      label: "New Customer"
+      icon: user-plus
+    - action: auto-add-deal
+      label: "New Deal"
+      icon: handshake
+    - action: auto-add-repair-order
+      label: "New Repair Order"
+      icon: wrench
+    - action: auto-add-trade-in-appraisal
+      label: "Trade-In Appraisal"
+      icon: arrow-left-right
+
+workflows:
+  - after: auto-add-customer
+    suggest:
+      - action: auto-add-vehicle
+        label: "Add a vehicle"
+      - action: auto-add-deal
+        label: "Start a deal"
+        pass: { customer-id: id }
+  - after: auto-add-vehicle
+    suggest:
+      - action: auto-add-deal
+        label: "Create deal for this vehicle"
+        pass: { vehicle-id: id }
+  - after: auto-add-deal
+    suggest:
+      - action: auto-add-deal-fi-product
+        label: "Add F&I product"
+        pass: { deal-id: id }
+      - action: auto-add-buyer-order
+        label: "Generate buyer order"
+        pass: { deal-id: id }
+      - action: auto-add-deal-trade
+        label: "Add trade-in"
+        pass: { deal-id: id }
+  - after: auto-add-buyer-order
+    suggest:
+      - action: auto-finalize-deal
+        label: "Finalize deal"
+        pass: { deal-id: deal_id }
+  - after: auto-add-repair-order
+    suggest:
+      - action: auto-add-service-line
+        label: "Add service line"
+        pass: { repair-order-id: id }
+  - after: auto-close-repair-order
+    suggest:
+      - action: auto-add-warranty-claim
+        label: "File warranty claim"
+        pass: { repair-order-id: id }

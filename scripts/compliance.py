@@ -169,7 +169,12 @@ def ofac_screening_check(conn, args):
         err("--customer-id is required")
     _validate_company(conn, args.company_id)
 
-    row = conn.execute("SELECT * FROM automotiveclaw_customer WHERE id = ?", (customer_id,)).fetchone()
+    row = conn.execute("""
+        SELECT ace.id, c.customer_name as name
+        FROM automotiveclaw_customer_ext ace
+        JOIN customer c ON ace.customer_id = c.id
+        WHERE ace.id = ?
+    """, (customer_id,)).fetchone()
     if not row:
         err(f"Customer {customer_id} not found")
     data = row_to_dict(row)

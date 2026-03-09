@@ -177,9 +177,13 @@ def list_parts(conn, args):
 # ===========================================================================
 def add_parts_order(conn, args):
     _validate_company(conn, args.company_id)
-    supplier = getattr(args, "supplier", None)
-    if not supplier:
-        err("--supplier is required")
+    supplier_id = getattr(args, "supplier_id", None)
+    if not supplier_id:
+        err("--supplier-id is required")
+    # Validate supplier FK against core supplier table
+    sup_row = conn.execute("SELECT id, name FROM supplier WHERE id = ?", (supplier_id,)).fetchone()
+    if not sup_row:
+        err(f"Supplier {supplier_id} not found in core supplier table")
 
     po_id = str(uuid.uuid4())
     now = _now_iso()
@@ -188,11 +192,11 @@ def add_parts_order(conn, args):
 
     conn.execute("""
         INSERT INTO automotiveclaw_parts_order (
-            id, naming_series, supplier, order_date, expected_date,
+            id, naming_series, supplier_id, order_date, expected_date,
             order_status, total_amount, company_id, created_at, updated_at
         ) VALUES (?,?,?,?,?,?,?,?,?,?)
     """, (
-        po_id, naming, supplier,
+        po_id, naming, supplier_id,
         getattr(args, "order_date", None) or now[:10],
         getattr(args, "expected_date", None),
         "ordered",
@@ -200,9 +204,9 @@ def add_parts_order(conn, args):
         args.company_id, now, now,
     ))
     audit(conn, SKILL, "auto-add-parts-order", "automotiveclaw_parts_order", po_id,
-          new_values={"supplier": supplier})
+          new_values={"supplier_id": supplier_id})
     conn.commit()
-    ok({"id": po_id, "naming_series": naming, "supplier": supplier, "order_status": "ordered"})
+    ok({"id": po_id, "naming_series": naming, "supplier_id": supplier_id, "supplier_name": sup_row[1], "order_status": "ordered"})
 
 
 # ===========================================================================

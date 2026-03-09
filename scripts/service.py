@@ -77,7 +77,7 @@ def add_repair_order(conn, args):
 
     customer_id = getattr(args, "customer_id", None)
     if customer_id:
-        if not conn.execute("SELECT id FROM automotiveclaw_customer WHERE id = ?", (customer_id,)).fetchone():
+        if not conn.execute("SELECT id FROM customer WHERE id = ?", (customer_id,)).fetchone():
             err(f"Customer {customer_id} not found")
 
     ro_id = str(uuid.uuid4())

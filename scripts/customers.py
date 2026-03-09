@@ -1,6 +1,6 @@
 """AutomotiveClaw -- customers domain module
 
-Actions for customer management (1 table, 6 actions).
+Actions for customer management (extension table + core customer via cross_skill).
 Imported by db_query.py (unified router).
 """
 import os
@@ -13,8 +13,9 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.cross_skill import create_customer, CrossSkillError
 
-    ENTITY_PREFIXES.setdefault("automotiveclaw_customer", "ACUST-")
+    ENTITY_PREFIXES.setdefault("automotiveclaw_customer_ext", "ACUST-")
 except ImportError:
     pass
 
@@ -25,12 +26,37 @@ _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 VALID_CUSTOMER_TYPES = ("individual", "business", "fleet")
 VALID_LEAD_SOURCES = ("walk_in", "internet", "phone", "referral", "repeat", "other")
 
+# Map automotiveclaw customer_type to core customer_type
+_CORE_CUSTOMER_TYPE = {
+    "individual": "Individual",
+    "business": "Company",
+    "fleet": "Company",
+}
+
 
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
     if not conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone():
         err(f"Company {company_id} not found")
+
+
+def _get_ext_by_id(conn, ext_id):
+    """Get extension row by its own id."""
+    return conn.execute("SELECT * FROM automotiveclaw_customer_ext WHERE id = ?", (ext_id,)).fetchone()
+
+
+def _get_ext_with_core(conn, ext_id):
+    """Get extension + core customer data via JOIN."""
+    return conn.execute("""
+        SELECT ace.id, ace.naming_series, ace.customer_id, ace.drivers_license,
+               ace.customer_type, ace.lead_source, ace.company_id,
+               ace.created_at, ace.updated_at,
+               c.customer_name as name, c.email, c.phone
+        FROM automotiveclaw_customer_ext ace
+        JOIN customer c ON ace.customer_id = c.id
+        WHERE ace.id = ?
+    """, (ext_id,)).fetchone()
 
 
 # ===========================================================================
@@ -50,33 +76,49 @@ def add_customer(conn, args):
     if lead_source not in VALID_LEAD_SOURCES:
         err(f"Invalid lead_source: {lead_source}. Must be one of: {', '.join(VALID_LEAD_SOURCES)}")
 
-    cust_id = str(uuid.uuid4())
+    email = getattr(args, "email", None)
+    phone = getattr(args, "phone", None)
+
+    # Step 1: Create core customer via cross_skill
+    core_customer_type = _CORE_CUSTOMER_TYPE.get(customer_type, "Individual")
+    try:
+        result = create_customer(
+            customer_name=name,
+            company_id=args.company_id,
+            customer_type=core_customer_type,
+            email=email,
+            phone=phone,
+        )
+    except CrossSkillError as e:
+        err(f"Failed to create core customer: {e}")
+
+    core_customer_id = result.get("id")
+    if not core_customer_id:
+        err("Failed to create core customer: no ID returned")
+
+    # Step 2: Create extension row
+    ext_id = str(uuid.uuid4())
     now = _now_iso()
     conn.company_id = args.company_id
-    naming = get_next_name(conn, "automotiveclaw_customer")
+    naming = get_next_name(conn, "automotiveclaw_customer_ext")
 
     conn.execute("""
-        INSERT INTO automotiveclaw_customer (
-            id, naming_series, name, email, phone, address, city, state,
-            zip_code, drivers_license, customer_type, lead_source,
+        INSERT INTO automotiveclaw_customer_ext (
+            id, naming_series, customer_id, drivers_license,
+            customer_type, lead_source,
             company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?)
     """, (
-        cust_id, naming, name,
-        getattr(args, "email", None),
-        getattr(args, "phone", None),
-        getattr(args, "address", None),
-        getattr(args, "city", None),
-        getattr(args, "state", None),
-        getattr(args, "zip_code", None),
+        ext_id, naming, core_customer_id,
         getattr(args, "drivers_license", None),
         customer_type, lead_source,
         args.company_id, now, now,
     ))
-    audit(conn, SKILL, "auto-add-customer", "automotiveclaw_customer", cust_id,
-          new_values={"name": name, "customer_type": customer_type})
+    audit(conn, SKILL, "auto-add-customer", "automotiveclaw_customer_ext", ext_id,
+          new_values={"name": name, "customer_type": customer_type, "core_customer_id": core_customer_id})
     conn.commit()
-    ok({"id": cust_id, "naming_series": naming, "name": name, "customer_type": customer_type})
+    ok({"id": ext_id, "customer_id": core_customer_id, "naming_series": naming,
+        "name": name, "customer_type": customer_type})
 
 
 # ===========================================================================
@@ -86,29 +128,52 @@ def update_customer(conn, args):
     cust_id = getattr(args, "customer_id", None)
     if not cust_id:
         err("--customer-id is required")
-    if not conn.execute("SELECT id FROM automotiveclaw_customer WHERE id = ?", (cust_id,)).fetchone():
+    ext_row = _get_ext_by_id(conn, cust_id)
+    if not ext_row:
         err(f"Customer {cust_id} not found")
+    ext_data = row_to_dict(ext_row)
+    core_customer_id = ext_data["customer_id"]
 
-    updates, params, changed = [], [], []
+    # Fields that live in core customer table
+    core_updates, core_params, changed = [], [], []
     for arg_name, col_name in {
-        "name": "name", "email": "email", "phone": "phone",
-        "address": "address", "city": "city", "state": "state",
-        "zip_code": "zip_code", "customer_type": "customer_type",
+        "name": "customer_name", "email": "email", "phone": "phone",
     }.items():
         val = getattr(args, arg_name, None)
         if val is not None:
-            updates.append(f"{col_name} = ?")
-            params.append(val)
-            changed.append(col_name)
+            core_updates.append(f"{col_name} = ?")
+            core_params.append(val)
+            changed.append(arg_name)
 
-    if not updates:
+    if core_updates:
+        core_updates.append("modified = ?")
+        core_params.append(_now_iso())
+        core_params.append(core_customer_id)
+        conn.execute(f"UPDATE customer SET {', '.join(core_updates)} WHERE id = ?", core_params)
+
+    # Fields that live in extension table
+    ext_updates, ext_params = [], []
+    for arg_name, col_name in {
+        "customer_type": "customer_type",
+        "drivers_license": "drivers_license",
+        "lead_source": "lead_source",
+    }.items():
+        val = getattr(args, arg_name, None)
+        if val is not None:
+            ext_updates.append(f"{col_name} = ?")
+            ext_params.append(val)
+            changed.append(arg_name)
+
+    if ext_updates:
+        ext_updates.append("updated_at = ?")
+        ext_params.append(_now_iso())
+        ext_params.append(cust_id)
+        conn.execute(f"UPDATE automotiveclaw_customer_ext SET {', '.join(ext_updates)} WHERE id = ?", ext_params)
+
+    if not changed:
         err("No fields to update")
 
-    updates.append("updated_at = ?")
-    params.append(_now_iso())
-    params.append(cust_id)
-    conn.execute(f"UPDATE automotiveclaw_customer SET {', '.join(updates)} WHERE id = ?", params)
-    audit(conn, SKILL, "auto-update-customer", "automotiveclaw_customer", cust_id,
+    audit(conn, SKILL, "auto-update-customer", "automotiveclaw_customer_ext", cust_id,
           new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": cust_id, "updated_fields": changed})
@@ -121,7 +186,7 @@ def get_customer(conn, args):
     cust_id = getattr(args, "customer_id", None)
     if not cust_id:
         err("--customer-id is required")
-    row = conn.execute("SELECT * FROM automotiveclaw_customer WHERE id = ?", (cust_id,)).fetchone()
+    row = _get_ext_with_core(conn, cust_id)
     if not row:
         err(f"Customer {cust_id} not found")
     ok(row_to_dict(row))
@@ -133,22 +198,30 @@ def get_customer(conn, args):
 def list_customers(conn, args):
     where, params = ["1=1"], []
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+        where.append("ace.company_id = ?")
         params.append(args.company_id)
     if getattr(args, "customer_type", None):
-        where.append("customer_type = ?")
+        where.append("ace.customer_type = ?")
         params.append(args.customer_type)
     if getattr(args, "search", None):
-        where.append("(name LIKE ? OR email LIKE ? OR phone LIKE ?)")
+        where.append("(c.customer_name LIKE ? OR c.email LIKE ? OR c.phone LIKE ?)")
         params.extend([f"%{args.search}%"] * 3)
 
     where_sql = " AND ".join(where)
     total = conn.execute(
-        f"SELECT COUNT(*) FROM automotiveclaw_customer WHERE {where_sql}", params
+        f"""SELECT COUNT(*) FROM automotiveclaw_customer_ext ace
+            JOIN customer c ON ace.customer_id = c.id
+            WHERE {where_sql}""", params
     ).fetchone()[0]
     params.extend([args.limit, args.offset])
     rows = conn.execute(
-        f"SELECT * FROM automotiveclaw_customer WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        f"""SELECT ace.id, ace.naming_series, ace.customer_id, ace.drivers_license,
+                   ace.customer_type, ace.lead_source, ace.company_id,
+                   ace.created_at, ace.updated_at,
+                   c.customer_name as name, c.email, c.phone
+            FROM automotiveclaw_customer_ext ace
+            JOIN customer c ON ace.customer_id = c.id
+            WHERE {where_sql} ORDER BY ace.created_at DESC LIMIT ? OFFSET ?""",
         params
     ).fetchall()
     ok({
@@ -165,8 +238,10 @@ def customer_vehicle_history(conn, args):
     cust_id = getattr(args, "customer_id", None)
     if not cust_id:
         err("--customer-id is required")
-    if not conn.execute("SELECT id FROM automotiveclaw_customer WHERE id = ?", (cust_id,)).fetchone():
+    ext_row = _get_ext_by_id(conn, cust_id)
+    if not ext_row:
         err(f"Customer {cust_id} not found")
+    core_customer_id = row_to_dict(ext_row)["customer_id"]
 
     rows = conn.execute("""
         SELECT d.id as deal_id, d.deal_type, d.deal_status, d.selling_price,
@@ -176,7 +251,7 @@ def customer_vehicle_history(conn, args):
         WHERE d.customer_id = ?
         ORDER BY d.created_at DESC
         LIMIT ? OFFSET ?
-    """, (cust_id, args.limit, args.offset)).fetchall()
+    """, (core_customer_id, args.limit, args.offset)).fetchall()
     ok({
         "customer_id": cust_id,
         "rows": [row_to_dict(r) for r in rows],
@@ -191,8 +266,10 @@ def customer_service_history(conn, args):
     cust_id = getattr(args, "customer_id", None)
     if not cust_id:
         err("--customer-id is required")
-    if not conn.execute("SELECT id FROM automotiveclaw_customer WHERE id = ?", (cust_id,)).fetchone():
+    ext_row = _get_ext_by_id(conn, cust_id)
+    if not ext_row:
         err(f"Customer {cust_id} not found")
+    core_customer_id = row_to_dict(ext_row)["customer_id"]
 
     rows = conn.execute("""
         SELECT id, naming_series, vehicle_vin, ro_type, ro_status,
@@ -201,7 +278,7 @@ def customer_service_history(conn, args):
         WHERE customer_id = ?
         ORDER BY created_at DESC
         LIMIT ? OFFSET ?
-    """, (cust_id, args.limit, args.offset)).fetchall()
+    """, (core_customer_id, args.limit, args.offset)).fetchall()
     ok({
         "customer_id": cust_id,
         "rows": [row_to_dict(r) for r in rows],

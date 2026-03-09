@@ -166,7 +166,7 @@ def fi_penetration(conn, args):
 # ===========================================================================
 def status_action(conn, args):
     tables = [
-        "automotiveclaw_customer", "automotiveclaw_vehicle", "automotiveclaw_vehicle_photo",
+        "automotiveclaw_customer_ext", "automotiveclaw_vehicle", "automotiveclaw_vehicle_photo",
         "automotiveclaw_trade_in", "automotiveclaw_deal", "automotiveclaw_buyer_order",
         "automotiveclaw_fi_product", "automotiveclaw_deal_fi_product",
         "automotiveclaw_repair_order", "automotiveclaw_service_line", "automotiveclaw_warranty_claim",
