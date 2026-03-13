@@ -80,7 +80,7 @@ def add_customer(conn, args):
     phone = getattr(args, "phone", None)
 
     # Step 1: Create core customer via cross_skill
-    core_customer_type = _CORE_CUSTOMER_TYPE.get(customer_type, "Individual")
+    core_customer_type = _CORE_CUSTOMER_TYPE.get(customer_type, "individual")
     try:
         result = create_customer(
             customer_name=name,
@@ -92,7 +92,7 @@ def add_customer(conn, args):
     except CrossSkillError as e:
         err(f"Failed to create core customer: {e}")
 
-    core_customer_id = result.get("id")
+    core_customer_id = result.get("customer_id") or result.get("id")
     if not core_customer_id:
         err("Failed to create core customer: no ID returned")
 
