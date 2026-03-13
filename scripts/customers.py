@@ -28,9 +28,9 @@ VALID_LEAD_SOURCES = ("walk_in", "internet", "phone", "referral", "repeat", "oth
 
 # Map automotiveclaw customer_type to core customer_type
 _CORE_CUSTOMER_TYPE = {
-    "individual": "Individual",
-    "business": "Company",
-    "fleet": "Company",
+    "individual": "individual",
+    "business": "company",
+    "fleet": "company",
 }
 
 
