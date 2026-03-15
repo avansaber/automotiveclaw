@@ -15,6 +15,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
 
     ENTITY_PREFIXES.setdefault("automotiveclaw_parts_order", "PO-")
 except ImportError:
@@ -30,7 +31,7 @@ VALID_ORDER_STATUSES = ("ordered", "partial", "received", "cancelled")
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
@@ -54,13 +55,8 @@ def add_part(conn, args):
     qty = int(args.quantity_on_hand) if getattr(args, "quantity_on_hand", None) else 0
     reorder = int(args.reorder_point) if getattr(args, "reorder_point", None) else 5
 
-    conn.execute("""
-        INSERT INTO automotiveclaw_part (
-            id, part_number, description, oem_number, manufacturer,
-            list_price, cost, quantity_on_hand, reorder_point, bin_location,
-            is_active, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("automotiveclaw_part", {"id": P(), "part_number": P(), "description": P(), "oem_number": P(), "manufacturer": P(), "list_price": P(), "cost": P(), "quantity_on_hand": P(), "reorder_point": P(), "bin_location": P(), "is_active": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         part_id, part_number,
         getattr(args, "description", None),
         getattr(args, "oem_number", None),
@@ -84,7 +80,7 @@ def update_part(conn, args):
     part_id = getattr(args, "part_id", None)
     if not part_id:
         err("--part-id is required")
-    if not conn.execute("SELECT id FROM automotiveclaw_part WHERE id = ?", (part_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("automotiveclaw_part")).select(Field("id")).where(Field("id") == P()).get_sql(), (part_id,)).fetchone():
         err(f"Part {part_id} not found")
 
     updates, params, changed = [], [], []
@@ -138,7 +134,7 @@ def get_part(conn, args):
     part_id = getattr(args, "part_id", None)
     if not part_id:
         err("--part-id is required")
-    row = conn.execute("SELECT * FROM automotiveclaw_part WHERE id = ?", (part_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("automotiveclaw_part")).select(Table("automotiveclaw_part").star).where(Field("id") == P()).get_sql(), (part_id,)).fetchone()
     if not row:
         err(f"Part {part_id} not found")
     ok(row_to_dict(row))
@@ -181,7 +177,7 @@ def add_parts_order(conn, args):
     if not supplier_id:
         err("--supplier-id is required")
     # Validate supplier FK against core supplier table
-    sup_row = conn.execute("SELECT id, name FROM supplier WHERE id = ?", (supplier_id,)).fetchone()
+    sup_row = conn.execute(Q.from_(Table("supplier")).select(Field("id"), Field("name")).where(Field("id") == P()).get_sql(), (supplier_id,)).fetchone()
     if not sup_row:
         err(f"Supplier {supplier_id} not found in core supplier table")
 
@@ -190,12 +186,8 @@ def add_parts_order(conn, args):
     conn.company_id = args.company_id
     naming = get_next_name(conn, "automotiveclaw_parts_order")
 
-    conn.execute("""
-        INSERT INTO automotiveclaw_parts_order (
-            id, naming_series, supplier_id, order_date, expected_date,
-            order_status, total_amount, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("automotiveclaw_parts_order", {"id": P(), "naming_series": P(), "supplier_id": P(), "order_date": P(), "expected_date": P(), "order_status": P(), "total_amount": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         po_id, naming, supplier_id,
         getattr(args, "order_date", None) or now[:10],
         getattr(args, "expected_date", None),
@@ -216,7 +208,7 @@ def receive_parts_order(conn, args):
     po_id = getattr(args, "parts_order_id", None)
     if not po_id:
         err("--parts-order-id is required")
-    row = conn.execute("SELECT * FROM automotiveclaw_parts_order WHERE id = ?", (po_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("automotiveclaw_parts_order")).select(Table("automotiveclaw_parts_order").star).where(Field("id") == P()).get_sql(), (po_id,)).fetchone()
     if not row:
         err(f"Parts order {po_id} not found")
     data = row_to_dict(row)

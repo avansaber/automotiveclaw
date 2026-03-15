@@ -14,6 +14,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
 except ImportError:
     pass
 
@@ -27,7 +28,7 @@ VALID_PRODUCT_TYPES = ("warranty", "gap", "maintenance", "tire_wheel", "paint", 
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
@@ -53,12 +54,8 @@ def add_fi_product(conn, args):
     prod_id = str(uuid.uuid4())
     term_months = int(args.term_months) if getattr(args, "term_months", None) else None
 
-    conn.execute("""
-        INSERT INTO automotiveclaw_fi_product (
-            id, name, product_type, provider, base_cost, retail_price,
-            max_markup, term_months, is_active, company_id, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("automotiveclaw_fi_product", {"id": P(), "name": P(), "product_type": P(), "provider": P(), "base_cost": P(), "retail_price": P(), "max_markup": P(), "term_months": P(), "is_active": P(), "company_id": P(), "created_at": P()})
+    conn.execute(sql, (
         prod_id, name, product_type,
         getattr(args, "provider", None),
         _to_money(getattr(args, "base_cost", None)),
@@ -110,13 +107,13 @@ def add_deal_fi_product(conn, args):
     deal_id = getattr(args, "deal_id", None)
     if not deal_id:
         err("--deal-id is required")
-    if not conn.execute("SELECT id FROM automotiveclaw_deal WHERE id = ?", (deal_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("automotiveclaw_deal")).select(Field("id")).where(Field("id") == P()).get_sql(), (deal_id,)).fetchone():
         err(f"Deal {deal_id} not found")
 
     fi_product_id = getattr(args, "fi_product_id", None)
     if not fi_product_id:
         err("--fi-product-id is required")
-    fi_row = conn.execute("SELECT * FROM automotiveclaw_fi_product WHERE id = ?", (fi_product_id,)).fetchone()
+    fi_row = conn.execute(Q.from_(Table("automotiveclaw_fi_product")).select(Table("automotiveclaw_fi_product").star).where(Field("id") == P()).get_sql(), (fi_product_id,)).fetchone()
     if not fi_row:
         err(f"F&I product {fi_product_id} not found")
 
@@ -132,12 +129,8 @@ def add_deal_fi_product(conn, args):
     profit = str(round_currency(sell_d - cost_d))
 
     dfp_id = str(uuid.uuid4())
-    conn.execute("""
-        INSERT INTO automotiveclaw_deal_fi_product (
-            id, deal_id, fi_product_id, cost, selling_price, profit,
-            term_months, company_id, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("automotiveclaw_deal_fi_product", {"id": P(), "deal_id": P(), "fi_product_id": P(), "cost": P(), "selling_price": P(), "profit": P(), "term_months": P(), "company_id": P(), "created_at": P()})
+    conn.execute(sql, (
         dfp_id, deal_id, fi_product_id,
         _to_money(cost), _to_money(selling_price), profit,
         term_months, args.company_id, _now_iso(),
@@ -175,7 +168,7 @@ def remove_deal_fi_product(conn, args):
     dfp_id = getattr(args, "deal_fi_product_id", None)
     if not dfp_id:
         err("--deal-fi-product-id is required")
-    if not conn.execute("SELECT id FROM automotiveclaw_deal_fi_product WHERE id = ?", (dfp_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("automotiveclaw_deal_fi_product")).select(Field("id")).where(Field("id") == P()).get_sql(), (dfp_id,)).fetchone():
         err(f"Deal F&I product {dfp_id} not found")
 
     conn.execute("DELETE FROM automotiveclaw_deal_fi_product WHERE id = ?", (dfp_id,))
@@ -235,7 +228,7 @@ def update_fi_markup(conn, args):
     prod_id = getattr(args, "fi_product_id", None)
     if not prod_id:
         err("--fi-product-id is required")
-    if not conn.execute("SELECT id FROM automotiveclaw_fi_product WHERE id = ?", (prod_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("automotiveclaw_fi_product")).select(Field("id")).where(Field("id") == P()).get_sql(), (prod_id,)).fetchone():
         err(f"F&I product {prod_id} not found")
 
     updates, params, changed = [], [], []

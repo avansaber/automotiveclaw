@@ -14,6 +14,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.cross_skill import create_customer, CrossSkillError
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
 
     ENTITY_PREFIXES.setdefault("automotiveclaw_customer_ext", "ACUST-")
 except ImportError:
@@ -37,13 +38,13 @@ _CORE_CUSTOMER_TYPE = {
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
 def _get_ext_by_id(conn, ext_id):
     """Get extension row by its own id."""
-    return conn.execute("SELECT * FROM automotiveclaw_customer_ext WHERE id = ?", (ext_id,)).fetchone()
+    return conn.execute(Q.from_(Table("automotiveclaw_customer_ext")).select(Table("automotiveclaw_customer_ext").star).where(Field("id") == P()).get_sql(), (ext_id,)).fetchone()
 
 
 def _get_ext_with_core(conn, ext_id):
@@ -102,13 +103,8 @@ def add_customer(conn, args):
     conn.company_id = args.company_id
     naming = get_next_name(conn, "automotiveclaw_customer_ext")
 
-    conn.execute("""
-        INSERT INTO automotiveclaw_customer_ext (
-            id, naming_series, customer_id, drivers_license,
-            customer_type, lead_source,
-            company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("automotiveclaw_customer_ext", {"id": P(), "naming_series": P(), "customer_id": P(), "drivers_license": P(), "customer_type": P(), "lead_source": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         ext_id, naming, core_customer_id,
         getattr(args, "drivers_license", None),
         customer_type, lead_source,

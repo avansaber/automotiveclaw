@@ -15,6 +15,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
 
     ENTITY_PREFIXES.setdefault("automotiveclaw_repair_order", "RO-")
     ENTITY_PREFIXES.setdefault("automotiveclaw_warranty_claim", "WC-")
@@ -35,7 +36,7 @@ VALID_CLAIM_STATUSES = ("submitted", "approved", "rejected", "paid")
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
@@ -77,7 +78,7 @@ def add_repair_order(conn, args):
 
     customer_id = getattr(args, "customer_id", None)
     if customer_id:
-        if not conn.execute("SELECT id FROM customer WHERE id = ?", (customer_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("customer")).select(Field("id")).where(Field("id") == P()).get_sql(), (customer_id,)).fetchone():
             err(f"Customer {customer_id} not found")
 
     ro_id = str(uuid.uuid4())
@@ -85,13 +86,8 @@ def add_repair_order(conn, args):
     conn.company_id = args.company_id
     naming = get_next_name(conn, "automotiveclaw_repair_order")
 
-    conn.execute("""
-        INSERT INTO automotiveclaw_repair_order (
-            id, naming_series, vehicle_vin, customer_id, advisor, technician,
-            ro_type, promised_date, ro_status, labor_total, parts_total, total,
-            company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("automotiveclaw_repair_order", {"id": P(), "naming_series": P(), "vehicle_vin": P(), "customer_id": P(), "advisor": P(), "technician": P(), "ro_type": P(), "promised_date": P(), "ro_status": P(), "labor_total": P(), "parts_total": P(), "total": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         ro_id, naming,
         getattr(args, "vehicle_vin", None),
         customer_id,
@@ -115,7 +111,7 @@ def update_repair_order(conn, args):
     ro_id = getattr(args, "repair_order_id", None)
     if not ro_id:
         err("--repair-order-id is required")
-    if not conn.execute("SELECT id FROM automotiveclaw_repair_order WHERE id = ?", (ro_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("automotiveclaw_repair_order")).select(Field("id")).where(Field("id") == P()).get_sql(), (ro_id,)).fetchone():
         err(f"Repair order {ro_id} not found")
 
     updates, params, changed = [], [], []
@@ -158,7 +154,7 @@ def get_repair_order(conn, args):
     ro_id = getattr(args, "repair_order_id", None)
     if not ro_id:
         err("--repair-order-id is required")
-    row = conn.execute("SELECT * FROM automotiveclaw_repair_order WHERE id = ?", (ro_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("automotiveclaw_repair_order")).select(Table("automotiveclaw_repair_order").star).where(Field("id") == P()).get_sql(), (ro_id,)).fetchone()
     if not row:
         err(f"Repair order {ro_id} not found")
     data = row_to_dict(row)
@@ -213,7 +209,7 @@ def close_repair_order(conn, args):
     ro_id = getattr(args, "repair_order_id", None)
     if not ro_id:
         err("--repair-order-id is required")
-    row = conn.execute("SELECT * FROM automotiveclaw_repair_order WHERE id = ?", (ro_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("automotiveclaw_repair_order")).select(Table("automotiveclaw_repair_order").star).where(Field("id") == P()).get_sql(), (ro_id,)).fetchone()
     if not row:
         err(f"Repair order {ro_id} not found")
     data = row_to_dict(row)
@@ -229,7 +225,7 @@ def close_repair_order(conn, args):
           new_values={"ro_status": "completed"})
     conn.commit()
 
-    updated = conn.execute("SELECT * FROM automotiveclaw_repair_order WHERE id = ?", (ro_id,)).fetchone()
+    updated = conn.execute(Q.from_(Table("automotiveclaw_repair_order")).select(Table("automotiveclaw_repair_order").star).where(Field("id") == P()).get_sql(), (ro_id,)).fetchone()
     ok({
         "id": ro_id, "ro_status": "completed",
         "labor_total": row_to_dict(updated)["labor_total"],
@@ -245,7 +241,7 @@ def add_service_line(conn, args):
     ro_id = getattr(args, "repair_order_id", None)
     if not ro_id:
         err("--repair-order-id is required")
-    if not conn.execute("SELECT id FROM automotiveclaw_repair_order WHERE id = ?", (ro_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("automotiveclaw_repair_order")).select(Field("id")).where(Field("id") == P()).get_sql(), (ro_id,)).fetchone():
         err(f"Repair order {ro_id} not found")
 
     _validate_company(conn, args.company_id)
@@ -267,12 +263,8 @@ def add_service_line(conn, args):
         amount = round_currency(qty * rate)
 
     line_id = str(uuid.uuid4())
-    conn.execute("""
-        INSERT INTO automotiveclaw_service_line (
-            id, repair_order_id, line_type, description, quantity, rate, amount,
-            technician, company_id, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("automotiveclaw_service_line", {"id": P(), "repair_order_id": P(), "line_type": P(), "description": P(), "quantity": P(), "rate": P(), "amount": P(), "technician": P(), "company_id": P(), "created_at": P()})
+    conn.execute(sql, (
         line_id, ro_id, line_type,
         getattr(args, "description", None),
         str(qty), str(rate), str(amount),
@@ -308,7 +300,7 @@ def add_warranty_claim(conn, args):
     ro_id = getattr(args, "repair_order_id", None)
     if not ro_id:
         err("--repair-order-id is required")
-    if not conn.execute("SELECT id FROM automotiveclaw_repair_order WHERE id = ?", (ro_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("automotiveclaw_repair_order")).select(Field("id")).where(Field("id") == P()).get_sql(), (ro_id,)).fetchone():
         err(f"Repair order {ro_id} not found")
 
     _validate_company(conn, args.company_id)
@@ -328,13 +320,8 @@ def add_warranty_claim(conn, args):
         to_decimal(labor_amount or "0") + to_decimal(parts_amount or "0")
     ))
 
-    conn.execute("""
-        INSERT INTO automotiveclaw_warranty_claim (
-            id, naming_series, repair_order_id, claim_number, claim_type,
-            labor_amount, parts_amount, total_amount, claim_status,
-            company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("automotiveclaw_warranty_claim", {"id": P(), "naming_series": P(), "repair_order_id": P(), "claim_number": P(), "claim_type": P(), "labor_amount": P(), "parts_amount": P(), "total_amount": P(), "claim_status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         claim_id, naming, ro_id,
         getattr(args, "claim_number", None),
         claim_type, labor_amount, parts_amount, total,
@@ -387,10 +374,7 @@ def list_warranty_claims(conn, args):
 def service_efficiency_report(conn, args):
     _validate_company(conn, args.company_id)
 
-    total_ros = conn.execute(
-        "SELECT COUNT(*) FROM automotiveclaw_repair_order WHERE company_id = ?",
-        (args.company_id,)
-    ).fetchone()[0]
+    total_ros = conn.execute(Q.from_(Table("automotiveclaw_repair_order")).select(fn.Count("*")).where(Field("company_id") == P()).get_sql(), (args.company_id,)).fetchone()[0]
 
     by_status = conn.execute(
         "SELECT ro_status, COUNT(*) as cnt FROM automotiveclaw_repair_order WHERE company_id = ? GROUP BY ro_status",

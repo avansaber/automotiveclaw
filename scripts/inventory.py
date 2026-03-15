@@ -15,6 +15,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
 
     ENTITY_PREFIXES.setdefault("automotiveclaw_vehicle", "VEH-")
     ENTITY_PREFIXES.setdefault("automotiveclaw_trade_in", "TRADE-")
@@ -36,7 +37,7 @@ VALID_TRADE_STATUSES = ("pending", "accepted", "rejected")
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
@@ -54,7 +55,7 @@ def add_vehicle(conn, args):
 
     vin = getattr(args, "vin", None)
     if vin:
-        existing = conn.execute("SELECT id FROM automotiveclaw_vehicle WHERE vin = ?", (vin,)).fetchone()
+        existing = conn.execute(Q.from_(Table("automotiveclaw_vehicle")).select(Field("id")).where(Field("vin") == P()).get_sql(), (vin,)).fetchone()
         if existing:
             err(f"Vehicle with VIN {vin} already exists")
 
@@ -81,16 +82,8 @@ def add_vehicle(conn, args):
     selling_price = str(round_currency(to_decimal(args.selling_price))) if getattr(args, "selling_price", None) else None
     internet_price = str(round_currency(to_decimal(args.internet_price))) if getattr(args, "internet_price", None) else None
 
-    conn.execute("""
-        INSERT INTO automotiveclaw_vehicle (
-            id, naming_series, vin, stock_number, year, make, model, trim,
-            color_exterior, color_interior, mileage, vehicle_condition,
-            body_style, engine, transmission, drivetrain,
-            msrp, invoice_price, selling_price, internet_price,
-            lot_location, days_in_stock, vehicle_status,
-            company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("automotiveclaw_vehicle", {"id": P(), "naming_series": P(), "vin": P(), "stock_number": P(), "year": P(), "make": P(), "model": P(), "trim": P(), "color_exterior": P(), "color_interior": P(), "mileage": P(), "vehicle_condition": P(), "body_style": P(), "engine": P(), "transmission": P(), "drivetrain": P(), "msrp": P(), "invoice_price": P(), "selling_price": P(), "internet_price": P(), "lot_location": P(), "days_in_stock": P(), "vehicle_status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         veh_id, naming, vin,
         getattr(args, "stock_number", None),
         year_val, make, model,
@@ -123,7 +116,7 @@ def update_vehicle(conn, args):
     veh_id = getattr(args, "vehicle_id", None)
     if not veh_id:
         err("--vehicle-id is required")
-    if not conn.execute("SELECT id FROM automotiveclaw_vehicle WHERE id = ?", (veh_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("automotiveclaw_vehicle")).select(Field("id")).where(Field("id") == P()).get_sql(), (veh_id,)).fetchone():
         err(f"Vehicle {veh_id} not found")
 
     updates, params, changed = [], [], []
@@ -168,7 +161,7 @@ def get_vehicle(conn, args):
     veh_id = getattr(args, "vehicle_id", None)
     if not veh_id:
         err("--vehicle-id is required")
-    row = conn.execute("SELECT * FROM automotiveclaw_vehicle WHERE id = ?", (veh_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("automotiveclaw_vehicle")).select(Table("automotiveclaw_vehicle").star).where(Field("id") == P()).get_sql(), (veh_id,)).fetchone()
     if not row:
         err(f"Vehicle {veh_id} not found")
     ok(row_to_dict(row))
@@ -219,7 +212,7 @@ def add_vehicle_photo(conn, args):
     if not veh_id:
         err("--vehicle-id is required")
     _validate_company(conn, args.company_id)
-    if not conn.execute("SELECT id FROM automotiveclaw_vehicle WHERE id = ?", (veh_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("automotiveclaw_vehicle")).select(Field("id")).where(Field("id") == P()).get_sql(), (veh_id,)).fetchone():
         err(f"Vehicle {veh_id} not found")
 
     photo_url = getattr(args, "photo_url", None)
@@ -229,11 +222,8 @@ def add_vehicle_photo(conn, args):
     photo_id = str(uuid.uuid4())
     photo_order = int(getattr(args, "photo_order", None) or 0)
 
-    conn.execute("""
-        INSERT INTO automotiveclaw_vehicle_photo (
-            id, vehicle_id, photo_url, photo_order, caption, company_id, created_at
-        ) VALUES (?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("automotiveclaw_vehicle_photo", {"id": P(), "vehicle_id": P(), "photo_url": P(), "photo_order": P(), "caption": P(), "company_id": P(), "created_at": P()})
+    conn.execute(sql, (
         photo_id, veh_id, photo_url, photo_order,
         getattr(args, "caption", None),
         args.company_id, _now_iso(),
@@ -264,7 +254,7 @@ def mark_vehicle_sold(conn, args):
     veh_id = getattr(args, "vehicle_id", None)
     if not veh_id:
         err("--vehicle-id is required")
-    row = conn.execute("SELECT * FROM automotiveclaw_vehicle WHERE id = ?", (veh_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("automotiveclaw_vehicle")).select(Table("automotiveclaw_vehicle").star).where(Field("id") == P()).get_sql(), (veh_id,)).fetchone()
     if not row:
         err(f"Vehicle {veh_id} not found")
     data = row_to_dict(row)
@@ -290,7 +280,7 @@ def add_trade_in_appraisal(conn, args):
     customer_id = getattr(args, "customer_id", None)
     if not customer_id:
         err("--customer-id is required")
-    if not conn.execute("SELECT id FROM customer WHERE id = ?", (customer_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("customer")).select(Field("id")).where(Field("id") == P()).get_sql(), (customer_id,)).fetchone():
         err(f"Customer {customer_id} not found")
 
     vin = getattr(args, "vin", None)
@@ -317,13 +307,8 @@ def add_trade_in_appraisal(conn, args):
     payoff = str(round_currency(to_decimal(args.payoff_amount))) if getattr(args, "payoff_amount", None) else None
     year_val = int(args.year) if getattr(args, "year", None) else None
 
-    conn.execute("""
-        INSERT INTO automotiveclaw_trade_in (
-            id, naming_series, vehicle_id, customer_id, vin, year, make, model,
-            mileage, trade_condition, offered_amount, acv, payoff_amount,
-            trade_status, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("automotiveclaw_trade_in", {"id": P(), "naming_series": P(), "vehicle_id": P(), "customer_id": P(), "vin": P(), "year": P(), "make": P(), "model": P(), "mileage": P(), "trade_condition": P(), "offered_amount": P(), "acv": P(), "payoff_amount": P(), "trade_status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         trade_id, naming,
         getattr(args, "vehicle_id", None),
         customer_id, vin, year_val, make, model_val,
@@ -396,10 +381,7 @@ def inventory_aging_report(conn, args):
 def inventory_summary(conn, args):
     _validate_company(conn, args.company_id)
 
-    total = conn.execute(
-        "SELECT COUNT(*) FROM automotiveclaw_vehicle WHERE company_id = ?",
-        (args.company_id,)
-    ).fetchone()[0]
+    total = conn.execute(Q.from_(Table("automotiveclaw_vehicle")).select(fn.Count("*")).where(Field("company_id") == P()).get_sql(), (args.company_id,)).fetchone()[0]
 
     by_status = conn.execute(
         "SELECT vehicle_status, COUNT(*) as cnt FROM automotiveclaw_vehicle WHERE company_id = ? GROUP BY vehicle_status",
@@ -425,7 +407,7 @@ def vin_lookup(conn, args):
     vin = getattr(args, "vin", None)
     if not vin:
         err("--vin is required")
-    row = conn.execute("SELECT * FROM automotiveclaw_vehicle WHERE vin = ?", (vin,)).fetchone()
+    row = conn.execute(Q.from_(Table("automotiveclaw_vehicle")).select(Table("automotiveclaw_vehicle").star).where(Field("vin") == P()).get_sql(), (vin,)).fetchone()
     if not row:
         err(f"No vehicle found with VIN {vin}")
     ok(row_to_dict(row))

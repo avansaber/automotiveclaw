@@ -15,6 +15,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
 
     ENTITY_PREFIXES.setdefault("automotiveclaw_deal", "DEAL-")
 except ImportError:
@@ -37,7 +38,7 @@ VALID_DEAL_STATUSES = ("pending", "negotiating", "submitted", "approved", "funde
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
@@ -67,13 +68,13 @@ def add_deal(conn, args):
     vehicle_id = getattr(args, "vehicle_id", None)
     if not vehicle_id:
         err("--vehicle-id is required")
-    if not conn.execute("SELECT id FROM automotiveclaw_vehicle WHERE id = ?", (vehicle_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("automotiveclaw_vehicle")).select(Field("id")).where(Field("id") == P()).get_sql(), (vehicle_id,)).fetchone():
         err(f"Vehicle {vehicle_id} not found")
 
     customer_id = getattr(args, "customer_id", None)
     if not customer_id:
         err("--customer-id is required")
-    if not conn.execute("SELECT id FROM customer WHERE id = ?", (customer_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("customer")).select(Field("id")).where(Field("id") == P()).get_sql(), (customer_id,)).fetchone():
         err(f"Customer {customer_id} not found")
 
     selling_price = getattr(args, "selling_price", None)
@@ -100,14 +101,8 @@ def add_deal(conn, args):
         to_decimal(sp or "0") - to_decimal(ta or "0") + to_decimal(tp or "0") - to_decimal(rb or "0")
     ))
 
-    conn.execute("""
-        INSERT INTO automotiveclaw_deal (
-            id, naming_series, vehicle_id, customer_id, salesperson,
-            deal_type, selling_price, trade_allowance, trade_payoff,
-            down_payment, rebates, front_gross, back_gross, total_gross,
-            deal_status, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("automotiveclaw_deal", {"id": P(), "naming_series": P(), "vehicle_id": P(), "customer_id": P(), "salesperson": P(), "deal_type": P(), "selling_price": P(), "trade_allowance": P(), "trade_payoff": P(), "down_payment": P(), "rebates": P(), "front_gross": P(), "back_gross": P(), "total_gross": P(), "deal_status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         deal_id, naming, vehicle_id, customer_id,
         getattr(args, "salesperson", None),
         deal_type, sp, ta, tp, dp, rb,
@@ -130,7 +125,7 @@ def update_deal(conn, args):
     deal_id = getattr(args, "deal_id", None)
     if not deal_id:
         err("--deal-id is required")
-    if not conn.execute("SELECT id FROM automotiveclaw_deal WHERE id = ?", (deal_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("automotiveclaw_deal")).select(Field("id")).where(Field("id") == P()).get_sql(), (deal_id,)).fetchone():
         err(f"Deal {deal_id} not found")
 
     updates, params, changed = [], [], []
@@ -182,22 +177,18 @@ def get_deal(conn, args):
     deal_id = getattr(args, "deal_id", None)
     if not deal_id:
         err("--deal-id is required")
-    row = conn.execute("SELECT * FROM automotiveclaw_deal WHERE id = ?", (deal_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("automotiveclaw_deal")).select(Table("automotiveclaw_deal").star).where(Field("id") == P()).get_sql(), (deal_id,)).fetchone()
     if not row:
         err(f"Deal {deal_id} not found")
     data = row_to_dict(row)
 
     # Include F&I products
-    fi_rows = conn.execute(
-        "SELECT * FROM automotiveclaw_deal_fi_product WHERE deal_id = ?", (deal_id,)
-    ).fetchall()
+    fi_rows = conn.execute(Q.from_(Table("automotiveclaw_deal_fi_product")).select(Table("automotiveclaw_deal_fi_product").star).where(Field("deal_id") == P()).get_sql(), (deal_id,)).fetchall()
     data["fi_products"] = [row_to_dict(r) for r in fi_rows]
     data["fi_product_count"] = len(fi_rows)
 
     # Include buyer order if exists
-    bo = conn.execute(
-        "SELECT * FROM automotiveclaw_buyer_order WHERE deal_id = ?", (deal_id,)
-    ).fetchone()
+    bo = conn.execute(Q.from_(Table("automotiveclaw_buyer_order")).select(Table("automotiveclaw_buyer_order").star).where(Field("deal_id") == P()).get_sql(), (deal_id,)).fetchone()
     data["buyer_order"] = row_to_dict(bo) if bo else None
 
     ok(data)
@@ -247,14 +238,14 @@ def add_deal_trade(conn, args):
     deal_id = getattr(args, "deal_id", None)
     if not deal_id:
         err("--deal-id is required")
-    deal_row = conn.execute("SELECT * FROM automotiveclaw_deal WHERE id = ?", (deal_id,)).fetchone()
+    deal_row = conn.execute(Q.from_(Table("automotiveclaw_deal")).select(Table("automotiveclaw_deal").star).where(Field("id") == P()).get_sql(), (deal_id,)).fetchone()
     if not deal_row:
         err(f"Deal {deal_id} not found")
 
     trade_in_id = getattr(args, "trade_in_id", None)
     if not trade_in_id:
         err("--trade-in-id is required")
-    trade_row = conn.execute("SELECT * FROM automotiveclaw_trade_in WHERE id = ?", (trade_in_id,)).fetchone()
+    trade_row = conn.execute(Q.from_(Table("automotiveclaw_trade_in")).select(Table("automotiveclaw_trade_in").star).where(Field("id") == P()).get_sql(), (trade_in_id,)).fetchone()
     if not trade_row:
         err(f"Trade-in {trade_in_id} not found")
 
@@ -282,7 +273,7 @@ def finalize_deal(conn, args):
     deal_id = getattr(args, "deal_id", None)
     if not deal_id:
         err("--deal-id is required")
-    row = conn.execute("SELECT * FROM automotiveclaw_deal WHERE id = ?", (deal_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("automotiveclaw_deal")).select(Table("automotiveclaw_deal").star).where(Field("id") == P()).get_sql(), (deal_id,)).fetchone()
     if not row:
         err(f"Deal {deal_id} not found")
     data = row_to_dict(row)
@@ -373,10 +364,7 @@ def finalize_deal(conn, args):
         # Optional COGS entries (DR: COGS, CR: Inventory)
         # Uses the vehicle's invoice_price as cost basis
         if gl_posted and cogs_account_id and inventory_account_id and data.get("vehicle_id"):
-            vehicle_row = conn.execute(
-                "SELECT invoice_price FROM automotiveclaw_vehicle WHERE id = ?",
-                (data["vehicle_id"],)
-            ).fetchone()
+            vehicle_row = conn.execute(Q.from_(Table("automotiveclaw_vehicle")).select(Field("invoice_price")).where(Field("id") == P()).get_sql(), (data["vehicle_id"],)).fetchone()
             if vehicle_row and vehicle_row["invoice_price"]:
                 cost_amount = str(round_currency(to_decimal(vehicle_row["invoice_price"])))
                 if to_decimal(cost_amount) > Decimal("0"):
@@ -436,7 +424,7 @@ def unwind_deal(conn, args):
     deal_id = getattr(args, "deal_id", None)
     if not deal_id:
         err("--deal-id is required")
-    row = conn.execute("SELECT * FROM automotiveclaw_deal WHERE id = ?", (deal_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("automotiveclaw_deal")).select(Table("automotiveclaw_deal").star).where(Field("id") == P()).get_sql(), (deal_id,)).fetchone()
     if not row:
         err(f"Deal {deal_id} not found")
     data = row_to_dict(row)
@@ -498,18 +486,18 @@ def add_buyer_order(conn, args):
     deal_id = getattr(args, "deal_id", None)
     if not deal_id:
         err("--deal-id is required")
-    if not conn.execute("SELECT id FROM automotiveclaw_deal WHERE id = ?", (deal_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("automotiveclaw_deal")).select(Field("id")).where(Field("id") == P()).get_sql(), (deal_id,)).fetchone():
         err(f"Deal {deal_id} not found")
 
     # Check no existing buyer order
-    if conn.execute("SELECT id FROM automotiveclaw_buyer_order WHERE deal_id = ?", (deal_id,)).fetchone():
+    if conn.execute(Q.from_(Table("automotiveclaw_buyer_order")).select(Field("id")).where(Field("deal_id") == P()).get_sql(), (deal_id,)).fetchone():
         err(f"Buyer order already exists for deal {deal_id}")
 
     vehicle_price = getattr(args, "vehicle_price", None)
     if not vehicle_price:
         err("--vehicle-price is required")
 
-    deal_row = conn.execute("SELECT company_id FROM automotiveclaw_deal WHERE id = ?", (deal_id,)).fetchone()
+    deal_row = conn.execute(Q.from_(Table("automotiveclaw_deal")).select(Field("company_id")).where(Field("id") == P()).get_sql(), (deal_id,)).fetchone()
     company_id = deal_row[0]
 
     bo_id = str(uuid.uuid4())
@@ -535,12 +523,8 @@ def add_buyer_order(conn, args):
     else:
         total = str(round_currency(to_decimal(subtotal) + to_decimal(tax or "0")))
 
-    conn.execute("""
-        INSERT INTO automotiveclaw_buyer_order (
-            id, deal_id, vehicle_price, trade_value, accessories, fees,
-            subtotal, tax_amount, total, company_id, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
-    """, (bo_id, deal_id, vp, tv, acc, fees, subtotal, tax, total, company_id, _now_iso()))
+    sql, _ = insert_row("automotiveclaw_buyer_order", {"id": P(), "deal_id": P(), "vehicle_price": P(), "trade_value": P(), "accessories": P(), "fees": P(), "subtotal": P(), "tax_amount": P(), "total": P(), "company_id": P(), "created_at": P()})
+    conn.execute(sql, (bo_id, deal_id, vp, tv, acc, fees, subtotal, tax, total, company_id, _now_iso()))
     conn.commit()
     ok({"id": bo_id, "deal_id": deal_id, "total": total})
 
@@ -552,7 +536,7 @@ def get_buyer_order(conn, args):
     deal_id = getattr(args, "deal_id", None)
     if not deal_id:
         err("--deal-id is required")
-    row = conn.execute("SELECT * FROM automotiveclaw_buyer_order WHERE deal_id = ?", (deal_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("automotiveclaw_buyer_order")).select(Table("automotiveclaw_buyer_order").star).where(Field("deal_id") == P()).get_sql(), (deal_id,)).fetchone()
     if not row:
         err(f"No buyer order found for deal {deal_id}")
     ok(row_to_dict(row))
@@ -582,9 +566,7 @@ def deal_gross_report(conn, args):
 def deal_summary(conn, args):
     _validate_company(conn, args.company_id)
 
-    total = conn.execute(
-        "SELECT COUNT(*) FROM automotiveclaw_deal WHERE company_id = ?", (args.company_id,)
-    ).fetchone()[0]
+    total = conn.execute(Q.from_(Table("automotiveclaw_deal")).select(fn.Count("*")).where(Field("company_id") == P()).get_sql(), (args.company_id,)).fetchone()[0]
 
     by_status = conn.execute(
         "SELECT deal_status, COUNT(*) as cnt FROM automotiveclaw_deal WHERE company_id = ? GROUP BY deal_status",

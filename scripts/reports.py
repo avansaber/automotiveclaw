@@ -11,6 +11,7 @@ try:
     sys.path.insert(0, os.path.expanduser("~/.openclaw/erpclaw/lib"))
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
 except ImportError:
     pass
 
@@ -20,7 +21,7 @@ SKILL = "automotiveclaw"
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
@@ -84,10 +85,7 @@ def gross_profit_report(conn, args):
 def service_efficiency(conn, args):
     _validate_company(conn, args.company_id)
 
-    total_ros = conn.execute(
-        "SELECT COUNT(*) FROM automotiveclaw_repair_order WHERE company_id = ?",
-        (args.company_id,)
-    ).fetchone()[0]
+    total_ros = conn.execute(Q.from_(Table("automotiveclaw_repair_order")).select(fn.Count("*")).where(Field("company_id") == P()).get_sql(), (args.company_id,)).fetchone()[0]
 
     completed = conn.execute(
         "SELECT COUNT(*) FROM automotiveclaw_repair_order WHERE company_id = ? AND ro_status IN ('completed','invoiced')",

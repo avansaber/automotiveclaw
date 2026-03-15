@@ -12,6 +12,7 @@ try:
     sys.path.insert(0, os.path.expanduser("~/.openclaw/erpclaw/lib"))
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
 except ImportError:
     pass
 
@@ -26,7 +27,7 @@ VALID_CHECK_RESULTS = ("pass", "fail", "pending")
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
@@ -39,7 +40,7 @@ def generate_buyers_guide(conn, args):
         err("--vehicle-id is required")
     _validate_company(conn, args.company_id)
 
-    row = conn.execute("SELECT * FROM automotiveclaw_vehicle WHERE id = ?", (vehicle_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("automotiveclaw_vehicle")).select(Table("automotiveclaw_vehicle").star).where(Field("id") == P()).get_sql(), (vehicle_id,)).fetchone()
     if not row:
         err(f"Vehicle {vehicle_id} not found")
     data = row_to_dict(row)
@@ -66,7 +67,7 @@ def generate_odometer_statement(conn, args):
         err("--vehicle-id is required")
     _validate_company(conn, args.company_id)
 
-    row = conn.execute("SELECT * FROM automotiveclaw_vehicle WHERE id = ?", (vehicle_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("automotiveclaw_vehicle")).select(Table("automotiveclaw_vehicle").star).where(Field("id") == P()).get_sql(), (vehicle_id,)).fetchone()
     if not row:
         err(f"Vehicle {vehicle_id} not found")
     data = row_to_dict(row)
@@ -92,7 +93,7 @@ def add_compliance_check(conn, args):
     deal_id = getattr(args, "deal_id", None)
     if not deal_id:
         err("--deal-id is required")
-    if not conn.execute("SELECT id FROM automotiveclaw_deal WHERE id = ?", (deal_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("automotiveclaw_deal")).select(Field("id")).where(Field("id") == P()).get_sql(), (deal_id,)).fetchone():
         err(f"Deal {deal_id} not found")
 
     _validate_company(conn, args.company_id)
@@ -108,12 +109,8 @@ def add_compliance_check(conn, args):
         err(f"Invalid check_result: {check_result}. Must be one of: {', '.join(VALID_CHECK_RESULTS)}")
 
     check_id = str(uuid.uuid4())
-    conn.execute("""
-        INSERT INTO automotiveclaw_compliance_check (
-            id, deal_id, check_type, check_result, checked_by,
-            check_date, notes, company_id, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("automotiveclaw_compliance_check", {"id": P(), "deal_id": P(), "check_type": P(), "check_result": P(), "checked_by": P(), "check_date": P(), "notes": P(), "company_id": P(), "created_at": P()})
+    conn.execute(sql, (
         check_id, deal_id, check_type, check_result,
         getattr(args, "checked_by", None),
         getattr(args, "check_date", None) or _now_iso()[:10],
@@ -196,10 +193,7 @@ def ofac_screening_check(conn, args):
 def compliance_summary(conn, args):
     _validate_company(conn, args.company_id)
 
-    total = conn.execute(
-        "SELECT COUNT(*) FROM automotiveclaw_compliance_check WHERE company_id = ?",
-        (args.company_id,)
-    ).fetchone()[0]
+    total = conn.execute(Q.from_(Table("automotiveclaw_compliance_check")).select(fn.Count("*")).where(Field("company_id") == P()).get_sql(), (args.company_id,)).fetchone()[0]
 
     by_type = conn.execute(
         "SELECT check_type, COUNT(*) as cnt FROM automotiveclaw_compliance_check WHERE company_id = ? GROUP BY check_type",
