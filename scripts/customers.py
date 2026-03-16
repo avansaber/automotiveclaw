@@ -53,7 +53,7 @@ def _get_ext_with_core(conn, ext_id):
         SELECT ace.id, ace.naming_series, ace.customer_id, ace.drivers_license,
                ace.customer_type, ace.lead_source, ace.company_id,
                ace.created_at, ace.updated_at,
-               c.customer_name as name, c.email, c.phone
+               c.name as name, c.email, c.phone
         FROM automotiveclaw_customer_ext ace
         JOIN customer c ON ace.customer_id = c.id
         WHERE ace.id = ?
@@ -133,7 +133,7 @@ def update_customer(conn, args):
     # Fields that live in core customer table
     core_updates, core_params, changed = [], [], []
     for arg_name, col_name in {
-        "name": "customer_name", "email": "email", "phone": "phone",
+        "name": "name", "email": "email", "phone": "phone",
     }.items():
         val = getattr(args, arg_name, None)
         if val is not None:
@@ -200,7 +200,7 @@ def list_customers(conn, args):
         where.append("ace.customer_type = ?")
         params.append(args.customer_type)
     if getattr(args, "search", None):
-        where.append("(c.customer_name LIKE ? OR c.email LIKE ? OR c.phone LIKE ?)")
+        where.append("(c.name LIKE ? OR c.email LIKE ? OR c.phone LIKE ?)")
         params.extend([f"%{args.search}%"] * 3)
 
     where_sql = " AND ".join(where)
@@ -214,7 +214,7 @@ def list_customers(conn, args):
         f"""SELECT ace.id, ace.naming_series, ace.customer_id, ace.drivers_license,
                    ace.customer_type, ace.lead_source, ace.company_id,
                    ace.created_at, ace.updated_at,
-                   c.customer_name as name, c.email, c.phone
+                   c.name as name, c.email, c.phone
             FROM automotiveclaw_customer_ext ace
             JOIN customer c ON ace.customer_id = c.id
             WHERE {where_sql} ORDER BY ace.created_at DESC LIMIT ? OFFSET ?""",

@@ -167,7 +167,7 @@ def ofac_screening_check(conn, args):
     _validate_company(conn, args.company_id)
 
     row = conn.execute("""
-        SELECT ace.id, c.customer_name as name
+        SELECT ace.id, c.name as name
         FROM automotiveclaw_customer_ext ace
         JOIN customer c ON ace.customer_id = c.id
         WHERE ace.id = ?
