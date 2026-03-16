@@ -14,7 +14,10 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.cross_skill import create_customer, CrossSkillError
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
+    from erpclaw_lib.query import (
+        Q, P, Table, Field, fn, Order, LiteralValue,
+        insert_row, update_row, dynamic_update,
+    )
 
     ENTITY_PREFIXES.setdefault("automotiveclaw_customer_ext", "ACUST-")
 except ImportError:
@@ -34,30 +37,43 @@ _CORE_CUSTOMER_TYPE = {
     "fleet": "company",
 }
 
+# ── Table aliases ──
+_ace = Table("automotiveclaw_customer_ext")
+_c = Table("customer")
+_d = Table("automotiveclaw_deal")
+_v = Table("automotiveclaw_vehicle")
+_ro = Table("automotiveclaw_repair_order")
+_company = Table("company")
+
 
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
+    q = Q.from_(_company).select(_company.id).where(_company.id == P())
+    if not conn.execute(q.get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
 def _get_ext_by_id(conn, ext_id):
     """Get extension row by its own id."""
-    return conn.execute(Q.from_(Table("automotiveclaw_customer_ext")).select(Table("automotiveclaw_customer_ext").star).where(Field("id") == P()).get_sql(), (ext_id,)).fetchone()
+    q = Q.from_(_ace).select(_ace.star).where(_ace.id == P())
+    return conn.execute(q.get_sql(), (ext_id,)).fetchone()
 
 
 def _get_ext_with_core(conn, ext_id):
     """Get extension + core customer data via JOIN."""
-    return conn.execute("""
-        SELECT ace.id, ace.naming_series, ace.customer_id, ace.drivers_license,
-               ace.customer_type, ace.lead_source, ace.company_id,
-               ace.created_at, ace.updated_at,
-               c.name as name, c.email, c.phone
-        FROM automotiveclaw_customer_ext ace
-        JOIN customer c ON ace.customer_id = c.id
-        WHERE ace.id = ?
-    """, (ext_id,)).fetchone()
+    q = (
+        Q.from_(_ace)
+        .join(_c).on(_ace.customer_id == _c.id)
+        .select(
+            _ace.id, _ace.naming_series, _ace.customer_id, _ace.drivers_license,
+            _ace.customer_type, _ace.lead_source, _ace.company_id,
+            _ace.created_at, _ace.updated_at,
+            _c.name.as_("name"), _c.email, _c.phone,
+        )
+        .where(_ace.id == P())
+    )
+    return conn.execute(q.get_sql(), (ext_id,)).fetchone()
 
 
 # ===========================================================================
@@ -131,24 +147,23 @@ def update_customer(conn, args):
     core_customer_id = ext_data["customer_id"]
 
     # Fields that live in core customer table
-    core_updates, core_params, changed = [], [], []
+    core_data = {}
+    changed = []
     for arg_name, col_name in {
         "name": "name", "email": "email", "phone": "phone",
     }.items():
         val = getattr(args, arg_name, None)
         if val is not None:
-            core_updates.append(f"{col_name} = ?")
-            core_params.append(val)
+            core_data[col_name] = val
             changed.append(arg_name)
 
-    if core_updates:
-        core_updates.append("modified = ?")
-        core_params.append(_now_iso())
-        core_params.append(core_customer_id)
-        conn.execute(f"UPDATE customer SET {', '.join(core_updates)} WHERE id = ?", core_params)
+    if core_data:
+        core_data["modified"] = _now_iso()
+        sql, params = dynamic_update("customer", core_data, where={"id": core_customer_id})
+        conn.execute(sql, params)
 
     # Fields that live in extension table
-    ext_updates, ext_params = [], []
+    ext_data_upd = {}
     for arg_name, col_name in {
         "customer_type": "customer_type",
         "drivers_license": "drivers_license",
@@ -156,15 +171,13 @@ def update_customer(conn, args):
     }.items():
         val = getattr(args, arg_name, None)
         if val is not None:
-            ext_updates.append(f"{col_name} = ?")
-            ext_params.append(val)
+            ext_data_upd[col_name] = val
             changed.append(arg_name)
 
-    if ext_updates:
-        ext_updates.append("updated_at = ?")
-        ext_params.append(_now_iso())
-        ext_params.append(cust_id)
-        conn.execute(f"UPDATE automotiveclaw_customer_ext SET {', '.join(ext_updates)} WHERE id = ?", ext_params)
+    if ext_data_upd:
+        ext_data_upd["updated_at"] = _now_iso()
+        sql, params = dynamic_update("automotiveclaw_customer_ext", ext_data_upd, where={"id": cust_id})
+        conn.execute(sql, params)
 
     if not changed:
         err("No fields to update")
@@ -192,34 +205,43 @@ def get_customer(conn, args):
 # 4. list-customers
 # ===========================================================================
 def list_customers(conn, args):
-    where, params = ["1=1"], []
+    # Build base query with JOIN
+    base = Q.from_(_ace).join(_c).on(_ace.customer_id == _c.id)
+
+    # Build WHERE conditions
+    conditions = []
+    params = []
     if getattr(args, "company_id", None):
-        where.append("ace.company_id = ?")
+        conditions.append(_ace.company_id == P())
         params.append(args.company_id)
     if getattr(args, "customer_type", None):
-        where.append("ace.customer_type = ?")
+        conditions.append(_ace.customer_type == P())
         params.append(args.customer_type)
     if getattr(args, "search", None):
-        where.append("(c.name LIKE ? OR c.email LIKE ? OR c.phone LIKE ?)")
+        # LIKE requires LiteralValue for the pattern in PyPika; use raw criterion
+        conditions.append(
+            (_c.name.like(P()) | _c.email.like(P()) | _c.phone.like(P()))
+        )
         params.extend([f"%{args.search}%"] * 3)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(
-        f"""SELECT COUNT(*) FROM automotiveclaw_customer_ext ace
-            JOIN customer c ON ace.customer_id = c.id
-            WHERE {where_sql}""", params
-    ).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"""SELECT ace.id, ace.naming_series, ace.customer_id, ace.drivers_license,
-                   ace.customer_type, ace.lead_source, ace.company_id,
-                   ace.created_at, ace.updated_at,
-                   c.name as name, c.email, c.phone
-            FROM automotiveclaw_customer_ext ace
-            JOIN customer c ON ace.customer_id = c.id
-            WHERE {where_sql} ORDER BY ace.created_at DESC LIMIT ? OFFSET ?""",
-        params
-    ).fetchall()
+    # Count query
+    count_q = base.select(fn.Count("*"))
+    for cond in conditions:
+        count_q = count_q.where(cond)
+    total = conn.execute(count_q.get_sql(), params).fetchone()[0]
+
+    # Data query
+    data_q = base.select(
+        _ace.id, _ace.naming_series, _ace.customer_id, _ace.drivers_license,
+        _ace.customer_type, _ace.lead_source, _ace.company_id,
+        _ace.created_at, _ace.updated_at,
+        _c.name.as_("name"), _c.email, _c.phone,
+    )
+    for cond in conditions:
+        data_q = data_q.where(cond)
+    data_q = data_q.orderby(_ace.created_at, order=Order.desc).limit(P()).offset(P())
+
+    rows = conn.execute(data_q.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -239,15 +261,18 @@ def customer_vehicle_history(conn, args):
         err(f"Customer {cust_id} not found")
     core_customer_id = row_to_dict(ext_row)["customer_id"]
 
-    rows = conn.execute("""
-        SELECT d.id as deal_id, d.deal_type, d.deal_status, d.selling_price,
-               d.delivered_date, v.vin, v.year, v.make, v.model
-        FROM automotiveclaw_deal d
-        LEFT JOIN automotiveclaw_vehicle v ON d.vehicle_id = v.id
-        WHERE d.customer_id = ?
-        ORDER BY d.created_at DESC
-        LIMIT ? OFFSET ?
-    """, (core_customer_id, args.limit, args.offset)).fetchall()
+    q = (
+        Q.from_(_d)
+        .left_join(_v).on(_d.vehicle_id == _v.id)
+        .select(
+            _d.id.as_("deal_id"), _d.deal_type, _d.deal_status, _d.selling_price,
+            _d.delivered_date, _v.vin, _v.year, _v.make, _v.model,
+        )
+        .where(_d.customer_id == P())
+        .orderby(_d.created_at, order=Order.desc)
+        .limit(P()).offset(P())
+    )
+    rows = conn.execute(q.get_sql(), (core_customer_id, args.limit, args.offset)).fetchall()
     ok({
         "customer_id": cust_id,
         "rows": [row_to_dict(r) for r in rows],
@@ -267,14 +292,17 @@ def customer_service_history(conn, args):
         err(f"Customer {cust_id} not found")
     core_customer_id = row_to_dict(ext_row)["customer_id"]
 
-    rows = conn.execute("""
-        SELECT id, naming_series, vehicle_vin, ro_type, ro_status,
-               labor_total, parts_total, total, created_at
-        FROM automotiveclaw_repair_order
-        WHERE customer_id = ?
-        ORDER BY created_at DESC
-        LIMIT ? OFFSET ?
-    """, (core_customer_id, args.limit, args.offset)).fetchall()
+    q = (
+        Q.from_(_ro)
+        .select(
+            _ro.id, _ro.naming_series, _ro.vehicle_vin, _ro.ro_type, _ro.ro_status,
+            _ro.labor_total, _ro.parts_total, _ro.total, _ro.created_at,
+        )
+        .where(_ro.customer_id == P())
+        .orderby(_ro.created_at, order=Order.desc)
+        .limit(P()).offset(P())
+    )
+    rows = conn.execute(q.get_sql(), (core_customer_id, args.limit, args.offset)).fetchall()
     ok({
         "customer_id": cust_id,
         "rows": [row_to_dict(r) for r in rows],

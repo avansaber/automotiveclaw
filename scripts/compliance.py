@@ -12,7 +12,10 @@ try:
     sys.path.insert(0, os.path.expanduser("~/.openclaw/erpclaw/lib"))
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
+    from erpclaw_lib.query import (
+        Q, P, Table, Field, fn, Order,
+        insert_row, update_row,
+    )
 except ImportError:
     pass
 
@@ -23,11 +26,20 @@ _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 VALID_CHECK_TYPES = ("ofac", "red_flag", "tila", "odometer", "buyers_guide")
 VALID_CHECK_RESULTS = ("pass", "fail", "pending")
 
+# ── Table aliases ──
+_company = Table("company")
+_vehicle = Table("automotiveclaw_vehicle")
+_deal = Table("automotiveclaw_deal")
+_cc = Table("automotiveclaw_compliance_check")
+_ace = Table("automotiveclaw_customer_ext")
+_c = Table("customer")
+
 
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
+    q = Q.from_(_company).select(_company.id).where(_company.id == P())
+    if not conn.execute(q.get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
@@ -40,7 +52,8 @@ def generate_buyers_guide(conn, args):
         err("--vehicle-id is required")
     _validate_company(conn, args.company_id)
 
-    row = conn.execute(Q.from_(Table("automotiveclaw_vehicle")).select(Table("automotiveclaw_vehicle").star).where(Field("id") == P()).get_sql(), (vehicle_id,)).fetchone()
+    q = Q.from_(_vehicle).select(_vehicle.star).where(_vehicle.id == P())
+    row = conn.execute(q.get_sql(), (vehicle_id,)).fetchone()
     if not row:
         err(f"Vehicle {vehicle_id} not found")
     data = row_to_dict(row)
@@ -67,7 +80,8 @@ def generate_odometer_statement(conn, args):
         err("--vehicle-id is required")
     _validate_company(conn, args.company_id)
 
-    row = conn.execute(Q.from_(Table("automotiveclaw_vehicle")).select(Table("automotiveclaw_vehicle").star).where(Field("id") == P()).get_sql(), (vehicle_id,)).fetchone()
+    q = Q.from_(_vehicle).select(_vehicle.star).where(_vehicle.id == P())
+    row = conn.execute(q.get_sql(), (vehicle_id,)).fetchone()
     if not row:
         err(f"Vehicle {vehicle_id} not found")
     data = row_to_dict(row)
@@ -93,7 +107,8 @@ def add_compliance_check(conn, args):
     deal_id = getattr(args, "deal_id", None)
     if not deal_id:
         err("--deal-id is required")
-    if not conn.execute(Q.from_(Table("automotiveclaw_deal")).select(Field("id")).where(Field("id") == P()).get_sql(), (deal_id,)).fetchone():
+    q = Q.from_(_deal).select(_deal.id).where(_deal.id == P())
+    if not conn.execute(q.get_sql(), (deal_id,)).fetchone():
         err(f"Deal {deal_id} not found")
 
     _validate_company(conn, args.company_id)
@@ -127,29 +142,35 @@ def add_compliance_check(conn, args):
 # 4. list-compliance-checks
 # ===========================================================================
 def list_compliance_checks(conn, args):
-    where, params = ["1=1"], []
+    # Build WHERE conditions dynamically
+    conditions = []
+    params = []
     if getattr(args, "deal_id", None):
-        where.append("deal_id = ?")
+        conditions.append(_cc.deal_id == P())
         params.append(args.deal_id)
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+        conditions.append(_cc.company_id == P())
         params.append(args.company_id)
     if getattr(args, "check_type", None):
-        where.append("check_type = ?")
+        conditions.append(_cc.check_type == P())
         params.append(args.check_type)
     if getattr(args, "check_result", None):
-        where.append("check_result = ?")
+        conditions.append(_cc.check_result == P())
         params.append(args.check_result)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(
-        f"SELECT COUNT(*) FROM automotiveclaw_compliance_check WHERE {where_sql}", params
-    ).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM automotiveclaw_compliance_check WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+    # Count query
+    count_q = Q.from_(_cc).select(fn.Count("*"))
+    for cond in conditions:
+        count_q = count_q.where(cond)
+    total = conn.execute(count_q.get_sql(), params).fetchone()[0]
+
+    # Data query
+    data_q = Q.from_(_cc).select(_cc.star)
+    for cond in conditions:
+        data_q = data_q.where(cond)
+    data_q = data_q.orderby(_cc.created_at, order=Order.desc).limit(P()).offset(P())
+
+    rows = conn.execute(data_q.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -166,12 +187,13 @@ def ofac_screening_check(conn, args):
         err("--customer-id is required")
     _validate_company(conn, args.company_id)
 
-    row = conn.execute("""
-        SELECT ace.id, c.name as name
-        FROM automotiveclaw_customer_ext ace
-        JOIN customer c ON ace.customer_id = c.id
-        WHERE ace.id = ?
-    """, (customer_id,)).fetchone()
+    q = (
+        Q.from_(_ace)
+        .join(_c).on(_ace.customer_id == _c.id)
+        .select(_ace.id, _c.name.as_("name"))
+        .where(_ace.id == P())
+    )
+    row = conn.execute(q.get_sql(), (customer_id,)).fetchone()
     if not row:
         err(f"Customer {customer_id} not found")
     data = row_to_dict(row)
@@ -193,17 +215,24 @@ def ofac_screening_check(conn, args):
 def compliance_summary(conn, args):
     _validate_company(conn, args.company_id)
 
-    total = conn.execute(Q.from_(Table("automotiveclaw_compliance_check")).select(fn.Count("*")).where(Field("company_id") == P()).get_sql(), (args.company_id,)).fetchone()[0]
+    q = Q.from_(_cc).select(fn.Count("*")).where(_cc.company_id == P())
+    total = conn.execute(q.get_sql(), (args.company_id,)).fetchone()[0]
 
-    by_type = conn.execute(
-        "SELECT check_type, COUNT(*) as cnt FROM automotiveclaw_compliance_check WHERE company_id = ? GROUP BY check_type",
-        (args.company_id,)
-    ).fetchall()
+    by_type_q = (
+        Q.from_(_cc)
+        .select(_cc.check_type, fn.Count("*").as_("cnt"))
+        .where(_cc.company_id == P())
+        .groupby(_cc.check_type)
+    )
+    by_type = conn.execute(by_type_q.get_sql(), (args.company_id,)).fetchall()
 
-    by_result = conn.execute(
-        "SELECT check_result, COUNT(*) as cnt FROM automotiveclaw_compliance_check WHERE company_id = ? GROUP BY check_result",
-        (args.company_id,)
-    ).fetchall()
+    by_result_q = (
+        Q.from_(_cc)
+        .select(_cc.check_result, fn.Count("*").as_("cnt"))
+        .where(_cc.company_id == P())
+        .groupby(_cc.check_result)
+    )
+    by_result = conn.execute(by_result_q.get_sql(), (args.company_id,)).fetchall()
 
     ok({
         "total_checks": total,
