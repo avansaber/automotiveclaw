@@ -212,7 +212,7 @@ def list_deals(conn, args):
         where.append("deal_type = ?")
         params.append(args.deal_type)
     if getattr(args, "search", None):
-        where.append("(salesperson LIKE ?)")
+        where.append("(LOWER(salesperson) LIKE LOWER(?))")
         params.append(f"%{args.search}%")
 
     where_sql = " AND ".join(where)
@@ -283,7 +283,7 @@ def finalize_deal(conn, args):
 
     # Calculate back gross from F&I products
     fi_profit = conn.execute(
-        "SELECT COALESCE(SUM(CAST(profit AS REAL)), 0) FROM automotiveclaw_deal_fi_product WHERE deal_id = ?",
+        "SELECT COALESCE(SUM(CAST(profit AS NUMERIC)), 0) FROM automotiveclaw_deal_fi_product WHERE deal_id = ?",
         (deal_id,)
     ).fetchone()[0]
     back_gross = str(round_currency(to_decimal(str(fi_profit))))
@@ -592,7 +592,7 @@ def salesperson_performance_report(conn, args):
     _validate_company(conn, args.company_id)
     rows = conn.execute("""
         SELECT salesperson, COUNT(*) as deal_count,
-               SUM(CAST(COALESCE(total_gross, '0') AS REAL)) as total_gross_sum
+               SUM(CAST(COALESCE(total_gross, '0') AS NUMERIC)) as total_gross_sum
         FROM automotiveclaw_deal
         WHERE company_id = ? AND salesperson IS NOT NULL
         GROUP BY salesperson

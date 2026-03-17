@@ -185,7 +185,7 @@ def list_vehicles(conn, args):
         where.append("make = ?")
         params.append(args.make)
     if getattr(args, "search", None):
-        where.append("(make LIKE ? OR model LIKE ? OR vin LIKE ? OR stock_number LIKE ?)")
+        where.append("(LOWER(make) LIKE LOWER(?) OR LOWER(model) LIKE LOWER(?) OR LOWER(vin) LIKE LOWER(?) OR LOWER(stock_number) LIKE LOWER(?))")
         params.extend([f"%{args.search}%"] * 4)
 
     where_sql = " AND ".join(where)

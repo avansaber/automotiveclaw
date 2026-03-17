@@ -149,7 +149,7 @@ def list_parts(conn, args):
         where.append("company_id = ?")
         params.append(args.company_id)
     if getattr(args, "search", None):
-        where.append("(part_number LIKE ? OR description LIKE ? OR oem_number LIKE ?)")
+        where.append("(LOWER(part_number) LIKE LOWER(?) OR LOWER(description) LIKE LOWER(?) OR LOWER(oem_number) LIKE LOWER(?))")
         params.extend([f"%{args.search}%"] * 3)
 
     where_sql = " AND ".join(where)
@@ -253,7 +253,7 @@ def parts_inventory_value(conn, args):
     ).fetchone()[0]
 
     total_value = conn.execute(
-        "SELECT COALESCE(SUM(CAST(cost AS REAL) * quantity_on_hand), 0) FROM automotiveclaw_part WHERE company_id = ? AND is_active = 1",
+        "SELECT COALESCE(SUM(CAST(cost AS NUMERIC) * quantity_on_hand), 0) FROM automotiveclaw_part WHERE company_id = ? AND is_active = 1",
         (args.company_id,)
     ).fetchone()[0]
 

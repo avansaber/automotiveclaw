@@ -49,11 +49,11 @@ def _to_money(val):
 def _recalc_ro_totals(conn, ro_id):
     """Recalculate labor_total, parts_total, total from service lines."""
     labor = conn.execute(
-        "SELECT COALESCE(SUM(CAST(amount AS REAL)), 0) FROM automotiveclaw_service_line WHERE repair_order_id = ? AND line_type = 'labor'",
+        "SELECT COALESCE(SUM(CAST(amount AS NUMERIC)), 0) FROM automotiveclaw_service_line WHERE repair_order_id = ? AND line_type = 'labor'",
         (ro_id,)
     ).fetchone()[0]
     parts = conn.execute(
-        "SELECT COALESCE(SUM(CAST(amount AS REAL)), 0) FROM automotiveclaw_service_line WHERE repair_order_id = ? AND line_type IN ('parts', 'sublet', 'fee')",
+        "SELECT COALESCE(SUM(CAST(amount AS NUMERIC)), 0) FROM automotiveclaw_service_line WHERE repair_order_id = ? AND line_type IN ('parts', 'sublet', 'fee')",
         (ro_id,)
     ).fetchone()[0]
     total = labor + parts
@@ -183,7 +183,7 @@ def list_repair_orders(conn, args):
         where.append("ro_status = ?")
         params.append(args.ro_status)
     if getattr(args, "search", None):
-        where.append("(vehicle_vin LIKE ? OR advisor LIKE ? OR technician LIKE ?)")
+        where.append("(LOWER(vehicle_vin) LIKE LOWER(?) OR LOWER(advisor) LIKE LOWER(?) OR LOWER(technician) LIKE LOWER(?))")
         params.extend([f"%{args.search}%"] * 3)
 
     where_sql = " AND ".join(where)
@@ -387,7 +387,7 @@ def service_efficiency_report(conn, args):
     ).fetchall()
 
     total_revenue = conn.execute(
-        "SELECT COALESCE(SUM(CAST(total AS REAL)), 0) FROM automotiveclaw_repair_order WHERE company_id = ?",
+        "SELECT COALESCE(SUM(CAST(total AS NUMERIC)), 0) FROM automotiveclaw_repair_order WHERE company_id = ?",
         (args.company_id,)
     ).fetchone()[0]
 

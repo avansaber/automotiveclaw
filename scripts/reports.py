@@ -63,12 +63,12 @@ def gross_profit_report(conn, args):
         FROM automotiveclaw_deal d
         LEFT JOIN automotiveclaw_vehicle v ON d.vehicle_id = v.id
         WHERE d.company_id = ? AND d.deal_status = 'delivered'
-        ORDER BY CAST(d.total_gross AS REAL) DESC
+        ORDER BY CAST(d.total_gross AS NUMERIC) DESC
         LIMIT ? OFFSET ?
     """, (args.company_id, args.limit, args.offset)).fetchall()
 
     total_gross = conn.execute(
-        "SELECT COALESCE(SUM(CAST(total_gross AS REAL)), 0) FROM automotiveclaw_deal WHERE company_id = ? AND deal_status = 'delivered'",
+        "SELECT COALESCE(SUM(CAST(total_gross AS NUMERIC)), 0) FROM automotiveclaw_deal WHERE company_id = ? AND deal_status = 'delivered'",
         (args.company_id,)
     ).fetchone()[0]
 
@@ -93,7 +93,7 @@ def service_efficiency(conn, args):
     ).fetchone()[0]
 
     total_revenue = conn.execute(
-        "SELECT COALESCE(SUM(CAST(total AS REAL)), 0) FROM automotiveclaw_repair_order WHERE company_id = ? AND ro_status IN ('completed','invoiced')",
+        "SELECT COALESCE(SUM(CAST(total AS NUMERIC)), 0) FROM automotiveclaw_repair_order WHERE company_id = ? AND ro_status IN ('completed','invoiced')",
         (args.company_id,)
     ).fetchone()[0]
 
@@ -143,7 +143,7 @@ def fi_penetration(conn, args):
     """, (args.company_id,)).fetchone()[0]
 
     total_fi_income = conn.execute("""
-        SELECT COALESCE(SUM(CAST(dfp.profit AS REAL)), 0)
+        SELECT COALESCE(SUM(CAST(dfp.profit AS NUMERIC)), 0)
         FROM automotiveclaw_deal_fi_product dfp
         JOIN automotiveclaw_deal d ON dfp.deal_id = d.id
         WHERE d.company_id = ?

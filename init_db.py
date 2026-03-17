@@ -22,9 +22,8 @@ REQUIRED_FOUNDATION = [
 def create_automotiveclaw_tables(db_path=None):
     db_path = db_path or os.environ.get("ERPCLAW_DB_PATH", DEFAULT_DB_PATH)
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
 
     # -- Verify ERPClaw foundation --
     tables = [r[0] for r in conn.execute(
@@ -56,8 +55,8 @@ def create_automotiveclaw_tables(db_path=None):
             lead_source     TEXT DEFAULT 'walk_in'
                             CHECK(lead_source IN ('walk_in','internet','phone','referral','repeat','other')),
             company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -101,8 +100,8 @@ def create_automotiveclaw_tables(db_path=None):
             vehicle_status  TEXT DEFAULT 'available'
                             CHECK(vehicle_status IN ('available','hold','sold','traded','wholesale','transit')),
             company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -122,7 +121,7 @@ def create_automotiveclaw_tables(db_path=None):
             photo_order     INTEGER DEFAULT 0,
             caption         TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -149,8 +148,8 @@ def create_automotiveclaw_tables(db_path=None):
             trade_status    TEXT DEFAULT 'pending'
                             CHECK(trade_status IN ('pending','accepted','rejected')),
             company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -186,8 +185,8 @@ def create_automotiveclaw_tables(db_path=None):
             delivered_date  TEXT,
             gl_entry_ids    TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -210,7 +209,7 @@ def create_automotiveclaw_tables(db_path=None):
             tax_amount      TEXT,
             total           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -235,7 +234,7 @@ def create_automotiveclaw_tables(db_path=None):
             term_months     INTEGER,
             is_active       INTEGER DEFAULT 1,
             company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -254,7 +253,7 @@ def create_automotiveclaw_tables(db_path=None):
             profit          TEXT,
             term_months     INTEGER,
             company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -284,8 +283,8 @@ def create_automotiveclaw_tables(db_path=None):
             parts_total     TEXT,
             total           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -308,7 +307,7 @@ def create_automotiveclaw_tables(db_path=None):
             amount          TEXT,
             technician      TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -330,8 +329,8 @@ def create_automotiveclaw_tables(db_path=None):
             claim_status    TEXT DEFAULT 'submitted'
                             CHECK(claim_status IN ('submitted','approved','rejected','paid')),
             company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -358,8 +357,8 @@ def create_automotiveclaw_tables(db_path=None):
             bin_location    TEXT,
             is_active       INTEGER DEFAULT 1,
             company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -379,8 +378,8 @@ def create_automotiveclaw_tables(db_path=None):
                             CHECK(order_status IN ('ordered','partial','received','cancelled')),
             total_amount    TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -405,7 +404,7 @@ def create_automotiveclaw_tables(db_path=None):
             check_date      TEXT,
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1

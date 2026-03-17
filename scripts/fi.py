@@ -81,7 +81,7 @@ def list_fi_products(conn, args):
         where.append("product_type = ?")
         params.append(args.product_type)
     if getattr(args, "search", None):
-        where.append("(name LIKE ? OR provider LIKE ?)")
+        where.append("(LOWER(name) LIKE LOWER(?) OR LOWER(provider) LIKE LOWER(?))")
         params.extend([f"%{args.search}%"] * 2)
 
     where_sql = " AND ".join(where)
@@ -308,7 +308,7 @@ def fi_product_performance(conn, args):
     rows = conn.execute("""
         SELECT fp.id, fp.name, fp.product_type,
                COUNT(dfp.id) as sold_count,
-               COALESCE(SUM(CAST(dfp.profit AS REAL)), 0) as total_profit
+               COALESCE(SUM(CAST(dfp.profit AS NUMERIC)), 0) as total_profit
         FROM automotiveclaw_fi_product fp
         LEFT JOIN automotiveclaw_deal_fi_product dfp ON fp.id = dfp.fi_product_id
         WHERE fp.company_id = ?
