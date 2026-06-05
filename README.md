@@ -1,6 +1,6 @@
 # AutomotiveClaw
 
-Automotive dealership management for [ERPClaw](https://github.com/avansaber/erpclaw). Vehicle inventory, deal structuring, F&I products, service department, parts management, and regulatory compliance. 70 actions across 8 domains.
+Automotive dealership management for [ERPClaw](https://github.com/avansaber/erpclaw). Vehicle inventory, deal structuring, F&I products, service department, parts management, and regulatory compliance. <!-- SYNC:value:module.automotiveclaw.actions -->70<!-- /SYNC --> actions across 8 domains.
 
 ## Features
 
