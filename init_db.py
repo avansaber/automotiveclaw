@@ -1,15 +1,36 @@
 #!/usr/bin/env python3
 """AutomotiveClaw schema extension -- adds automotive dealership tables to the shared database.
 
-18 tables across 8 domains: inventory, deals, fi, service, parts, customers,
-compliance, reports.
+14 tables across 7 domains: customers, inventory, deals, fi, service, parts,
+compliance.
 
 Prerequisite: ERPClaw init_db.py must have run first (creates foundation tables).
 Run: python3 init_db.py [db_path]
+
+ADR-0034 phase 2 bulk-39. Schema declared as metadata and provisioned through
+`erpclaw_lib.seam`, which emits dialect-correct DDL, replacing a hand-written
+``CREATE TABLE`` block opened with ``sqlite3.connect`` that could not run on
+PostgreSQL at all. The docstring's table count said 18 across 8 domains
+(including a "reports" domain); the file has only ever created 14 across 7, and
+the count is corrected here rather than carried forward. Money stays TEXT
+throughout -- selling prices, gross, payoffs and repair-order totals all remain
+Decimal strings.
 """
+import importlib.util
 import os
-import sqlite3
 import sys
+
+# Bootstrap the shared lib only when it is not already reachable -- an
+# unconditional insert at position 0 overrides a caller that deliberately bound a
+# different tree (ADR-0034 phase 2 step 2d).
+if importlib.util.find_spec("erpclaw_lib") is None:
+    sys.path.insert(0, os.path.join(os.path.expanduser(
+        os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+
+from erpclaw_lib.seam import (  # noqa: E402
+    CheckConstraint, Column, ForeignKey, Index, Integer, MetaData, Table, Text,
+    provision, reference_table, text,
+)
 
 DEFAULT_DB_PATH = os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "data.sqlite")
 DISPLAY_NAME = "AutomotiveClaw"
@@ -18,407 +39,481 @@ REQUIRED_FOUNDATION = [
     "company", "customer", "naming_series", "audit_log",
 ]
 
+METADATA = MetaData()
 
-def create_automotiveclaw_tables(db_path=None):
-    db_path = db_path or os.environ.get("ERPCLAW_DB_PATH", DEFAULT_DB_PATH)
-    conn = sqlite3.connect(db_path)
-    from erpclaw_lib.db import setup_pragmas
-    setup_pragmas(conn)
+# Foundation tables this module points at but does not own -- declared for
+# foreign-key resolution only and never created here.
+reference_table("company", METADATA)
+reference_table("customer", METADATA)
+reference_table("supplier", METADATA)
 
-    # -- Verify ERPClaw foundation --
-    tables = [r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'"
-    ).fetchall()]
-    missing = [t for t in REQUIRED_FOUNDATION if t not in tables]
+# ==================================================================
+# CUSTOMERS DOMAIN (extension table -- core fields live in customer)
+# ==================================================================
+
+# ---------------------------------------------------------------------------
+# 1. automotiveclaw_customer_ext
+# ---------------------------------------------------------------------------
+CUSTOMER_EXT = Table(
+    "automotiveclaw_customer_ext", METADATA,
+    Column("id", Text, primary_key=True, nullable=True),
+    Column("naming_series", Text, server_default=text("'ACUST-'")),
+    Column("customer_id", Text, ForeignKey("customer.id"), nullable=False),
+    Column("drivers_license", Text),
+    Column("customer_type", Text, server_default=text("'individual'")),
+    Column("lead_source", Text, server_default=text("'walk_in'")),
+    Column("company_id", Text, ForeignKey("company.id"), nullable=False),
+    Column("created_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+    Column("updated_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+    CheckConstraint("customer_type IN ('individual','business','fleet')",
+                    name="ck_automotiveclaw_customer_ext_customer_type"),
+    CheckConstraint(
+        "lead_source IN ('walk_in','internet','phone','referral','repeat','other')",
+        name="ck_automotiveclaw_customer_ext_lead_source"),
+)
+
+Index("idx_ac_custext_company", CUSTOMER_EXT.c.company_id)
+Index("idx_ac_custext_customer", CUSTOMER_EXT.c.customer_id)
+Index("idx_ac_custext_type", CUSTOMER_EXT.c.customer_type)
+
+# ==================================================================
+# INVENTORY DOMAIN
+# ==================================================================
+
+# ---------------------------------------------------------------------------
+# 2. automotiveclaw_vehicle
+# ---------------------------------------------------------------------------
+VEHICLE = Table(
+    "automotiveclaw_vehicle", METADATA,
+    Column("id", Text, primary_key=True, nullable=True),
+    Column("naming_series", Text),
+    # Column-level UNIQUE as shipped: the VIN is the dedupe key for an inbound
+    # unit, so losing it would let the same car be stocked in twice.
+    Column("vin", Text, unique=True),
+    Column("stock_number", Text),
+    Column("year", Integer),
+    Column("make", Text),
+    Column("model", Text),
+    Column("trim", Text),
+    Column("color_exterior", Text),
+    Column("color_interior", Text),
+    Column("mileage", Text),
+    Column("vehicle_condition", Text, server_default=text("'new'")),
+    Column("body_style", Text),
+    Column("engine", Text),
+    Column("transmission", Text, server_default=text("'automatic'")),
+    Column("drivetrain", Text, server_default=text("'fwd'")),
+    Column("msrp", Text),
+    Column("invoice_price", Text),
+    Column("selling_price", Text),
+    Column("internet_price", Text),
+    Column("lot_location", Text),
+    Column("days_in_stock", Integer, server_default=text("0")),
+    Column("vehicle_status", Text, server_default=text("'available'")),
+    Column("company_id", Text, ForeignKey("company.id"), nullable=False),
+    Column("created_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+    Column("updated_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+    CheckConstraint("vehicle_condition IN ('new','used','cpo')",
+                    name="ck_automotiveclaw_vehicle_vehicle_condition"),
+    CheckConstraint("transmission IN ('automatic','manual','cvt')",
+                    name="ck_automotiveclaw_vehicle_transmission"),
+    CheckConstraint("drivetrain IN ('fwd','rwd','awd','4wd')",
+                    name="ck_automotiveclaw_vehicle_drivetrain"),
+    CheckConstraint(
+        "vehicle_status IN ('available','hold','sold','traded','wholesale','transit')",
+        name="ck_automotiveclaw_vehicle_vehicle_status"),
+)
+
+Index("idx_ac_veh_company", VEHICLE.c.company_id)
+Index("idx_ac_veh_vin", VEHICLE.c.vin)
+Index("idx_ac_veh_status", VEHICLE.c.vehicle_status)
+Index("idx_ac_veh_make", VEHICLE.c.make)
+Index("idx_ac_veh_condition", VEHICLE.c.vehicle_condition)
+
+# ---------------------------------------------------------------------------
+# 3. automotiveclaw_vehicle_photo
+# ---------------------------------------------------------------------------
+VEHICLE_PHOTO = Table(
+    "automotiveclaw_vehicle_photo", METADATA,
+    Column("id", Text, primary_key=True, nullable=True),
+    Column("vehicle_id", Text, ForeignKey("automotiveclaw_vehicle.id"),
+           nullable=False),
+    Column("photo_url", Text),
+    Column("photo_order", Integer, server_default=text("0")),
+    Column("caption", Text),
+    Column("company_id", Text, ForeignKey("company.id"), nullable=False),
+    Column("created_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+)
+
+Index("idx_ac_vphoto_vehicle", VEHICLE_PHOTO.c.vehicle_id)
+
+# ---------------------------------------------------------------------------
+# 4. automotiveclaw_trade_in
+# ---------------------------------------------------------------------------
+TRADE_IN = Table(
+    "automotiveclaw_trade_in", METADATA,
+    Column("id", Text, primary_key=True, nullable=True),
+    Column("naming_series", Text),
+    # Nullable here, NOT NULL on the photo table: an appraisal can exist before
+    # the trade is stocked in. Asymmetry preserved as shipped.
+    Column("vehicle_id", Text, ForeignKey("automotiveclaw_vehicle.id")),
+    Column("customer_id", Text, ForeignKey("customer.id")),
+    Column("vin", Text),
+    Column("year", Integer),
+    Column("make", Text),
+    Column("model", Text),
+    Column("mileage", Text),
+    Column("trade_condition", Text, server_default=text("'good'")),
+    Column("offered_amount", Text),
+    Column("acv", Text),
+    Column("payoff_amount", Text),
+    Column("trade_status", Text, server_default=text("'pending'")),
+    Column("company_id", Text, ForeignKey("company.id"), nullable=False),
+    Column("created_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+    Column("updated_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+    CheckConstraint("trade_condition IN ('excellent','good','fair','poor')",
+                    name="ck_automotiveclaw_trade_in_trade_condition"),
+    CheckConstraint("trade_status IN ('pending','accepted','rejected')",
+                    name="ck_automotiveclaw_trade_in_trade_status"),
+)
+
+Index("idx_ac_trade_vehicle", TRADE_IN.c.vehicle_id)
+Index("idx_ac_trade_customer", TRADE_IN.c.customer_id)
+Index("idx_ac_trade_status", TRADE_IN.c.trade_status)
+
+# ==================================================================
+# DEALS DOMAIN
+# ==================================================================
+
+# ---------------------------------------------------------------------------
+# 5. automotiveclaw_deal
+# ---------------------------------------------------------------------------
+DEAL = Table(
+    "automotiveclaw_deal", METADATA,
+    Column("id", Text, primary_key=True, nullable=True),
+    Column("naming_series", Text),
+    Column("vehicle_id", Text, ForeignKey("automotiveclaw_vehicle.id")),
+    Column("customer_id", Text, ForeignKey("customer.id")),
+    Column("salesperson", Text),
+    Column("deal_type", Text, server_default=text("'retail'")),
+    Column("selling_price", Text),
+    Column("trade_allowance", Text),
+    Column("trade_payoff", Text),
+    Column("down_payment", Text),
+    Column("rebates", Text),
+    Column("front_gross", Text),
+    Column("back_gross", Text),
+    Column("total_gross", Text),
+    Column("deal_status", Text, server_default=text("'pending'")),
+    Column("delivered_date", Text),
+    Column("gl_entry_ids", Text),
+    Column("company_id", Text, ForeignKey("company.id"), nullable=False),
+    Column("created_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+    Column("updated_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+    CheckConstraint("deal_type IN ('retail','lease','wholesale','fleet')",
+                    name="ck_automotiveclaw_deal_deal_type"),
+    CheckConstraint(
+        "deal_status IN ('pending','negotiating','submitted','approved','funded','delivered','unwound')",
+        name="ck_automotiveclaw_deal_deal_status"),
+)
+
+Index("idx_ac_deal_vehicle", DEAL.c.vehicle_id)
+Index("idx_ac_deal_customer", DEAL.c.customer_id)
+Index("idx_ac_deal_status", DEAL.c.deal_status)
+Index("idx_ac_deal_company", DEAL.c.company_id)
+
+# ---------------------------------------------------------------------------
+# 6. automotiveclaw_buyer_order
+# ---------------------------------------------------------------------------
+BUYER_ORDER = Table(
+    "automotiveclaw_buyer_order", METADATA,
+    Column("id", Text, primary_key=True, nullable=True),
+    # One buyer order per deal, enforced by a column-level UNIQUE as shipped.
+    Column("deal_id", Text, ForeignKey("automotiveclaw_deal.id"),
+           nullable=False, unique=True),
+    Column("vehicle_price", Text),
+    Column("trade_value", Text),
+    Column("accessories", Text),
+    Column("fees", Text),
+    Column("subtotal", Text),
+    Column("tax_amount", Text),
+    Column("total", Text),
+    Column("company_id", Text, ForeignKey("company.id"), nullable=False),
+    Column("created_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+)
+
+Index("idx_ac_bo_deal", BUYER_ORDER.c.deal_id)
+
+# ==================================================================
+# F&I DOMAIN
+# ==================================================================
+
+# ---------------------------------------------------------------------------
+# 7. automotiveclaw_fi_product
+# ---------------------------------------------------------------------------
+FI_PRODUCT = Table(
+    "automotiveclaw_fi_product", METADATA,
+    Column("id", Text, primary_key=True, nullable=True),
+    Column("name", Text, nullable=False),
+    Column("product_type", Text, server_default=text("'warranty'")),
+    Column("provider", Text),
+    Column("base_cost", Text),
+    Column("retail_price", Text),
+    Column("max_markup", Text),
+    Column("term_months", Integer),
+    Column("is_active", Integer, server_default=text("1")),
+    Column("company_id", Text, ForeignKey("company.id"), nullable=False),
+    Column("created_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+    CheckConstraint(
+        "product_type IN ('warranty','gap','maintenance','tire_wheel','paint','theft','other')",
+        name="ck_automotiveclaw_fi_product_product_type"),
+)
+
+Index("idx_ac_fiprod_company", FI_PRODUCT.c.company_id)
+Index("idx_ac_fiprod_type", FI_PRODUCT.c.product_type)
+
+# ---------------------------------------------------------------------------
+# 8. automotiveclaw_deal_fi_product
+# ---------------------------------------------------------------------------
+DEAL_FI_PRODUCT = Table(
+    "automotiveclaw_deal_fi_product", METADATA,
+    Column("id", Text, primary_key=True, nullable=True),
+    Column("deal_id", Text, ForeignKey("automotiveclaw_deal.id"), nullable=False),
+    Column("fi_product_id", Text, ForeignKey("automotiveclaw_fi_product.id"),
+           nullable=False),
+    Column("cost", Text),
+    Column("selling_price", Text),
+    Column("profit", Text),
+    Column("term_months", Integer),
+    Column("company_id", Text, ForeignKey("company.id"), nullable=False),
+    Column("created_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+)
+
+Index("idx_ac_dealfi_deal", DEAL_FI_PRODUCT.c.deal_id)
+Index("idx_ac_dealfi_prod", DEAL_FI_PRODUCT.c.fi_product_id)
+
+# ==================================================================
+# SERVICE DOMAIN
+# ==================================================================
+
+# ---------------------------------------------------------------------------
+# 9. automotiveclaw_repair_order
+# ---------------------------------------------------------------------------
+REPAIR_ORDER = Table(
+    "automotiveclaw_repair_order", METADATA,
+    Column("id", Text, primary_key=True, nullable=True),
+    Column("naming_series", Text),
+    # The RO carries a bare VIN, not a vehicle_id: service writes ROs for cars
+    # the dealership never stocked. No foreign key, as shipped.
+    Column("vehicle_vin", Text),
+    Column("customer_id", Text, ForeignKey("customer.id")),
+    Column("advisor", Text),
+    Column("technician", Text),
+    Column("ro_type", Text, server_default=text("'customer_pay'")),
+    Column("promised_date", Text),
+    Column("ro_status", Text, server_default=text("'open'")),
+    Column("labor_total", Text),
+    Column("parts_total", Text),
+    Column("total", Text),
+    Column("company_id", Text, ForeignKey("company.id"), nullable=False),
+    Column("created_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+    Column("updated_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+    CheckConstraint(
+        "ro_type IN ('customer_pay','warranty','internal','recall')",
+        name="ck_automotiveclaw_repair_order_ro_type"),
+    CheckConstraint(
+        "ro_status IN ('open','in_progress','waiting_parts','completed','invoiced')",
+        name="ck_automotiveclaw_repair_order_ro_status"),
+)
+
+Index("idx_ac_ro_customer", REPAIR_ORDER.c.customer_id)
+Index("idx_ac_ro_status", REPAIR_ORDER.c.ro_status)
+Index("idx_ac_ro_company", REPAIR_ORDER.c.company_id)
+Index("idx_ac_ro_vin", REPAIR_ORDER.c.vehicle_vin)
+
+# ---------------------------------------------------------------------------
+# 10. automotiveclaw_service_line
+# ---------------------------------------------------------------------------
+SERVICE_LINE = Table(
+    "automotiveclaw_service_line", METADATA,
+    Column("id", Text, primary_key=True, nullable=True),
+    Column("repair_order_id", Text,
+           ForeignKey("automotiveclaw_repair_order.id"), nullable=False),
+    Column("line_type", Text, server_default=text("'labor'")),
+    Column("description", Text),
+    Column("quantity", Text),
+    Column("rate", Text),
+    Column("amount", Text),
+    Column("technician", Text),
+    Column("company_id", Text, ForeignKey("company.id"), nullable=False),
+    Column("created_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+    CheckConstraint("line_type IN ('labor','parts','sublet','fee')",
+                    name="ck_automotiveclaw_service_line_line_type"),
+)
+
+Index("idx_ac_svcline_ro", SERVICE_LINE.c.repair_order_id)
+
+# ---------------------------------------------------------------------------
+# 11. automotiveclaw_warranty_claim
+# ---------------------------------------------------------------------------
+WARRANTY_CLAIM = Table(
+    "automotiveclaw_warranty_claim", METADATA,
+    Column("id", Text, primary_key=True, nullable=True),
+    Column("naming_series", Text),
+    Column("repair_order_id", Text,
+           ForeignKey("automotiveclaw_repair_order.id"), nullable=False),
+    Column("claim_number", Text),
+    Column("claim_type", Text, server_default=text("'factory'")),
+    Column("labor_amount", Text),
+    Column("parts_amount", Text),
+    Column("total_amount", Text),
+    Column("claim_status", Text, server_default=text("'submitted'")),
+    Column("company_id", Text, ForeignKey("company.id"), nullable=False),
+    Column("created_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+    Column("updated_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+    CheckConstraint("claim_type IN ('factory','extended','goodwill')",
+                    name="ck_automotiveclaw_warranty_claim_claim_type"),
+    CheckConstraint(
+        "claim_status IN ('submitted','approved','rejected','paid')",
+        name="ck_automotiveclaw_warranty_claim_claim_status"),
+)
+
+Index("idx_ac_wc_ro", WARRANTY_CLAIM.c.repair_order_id)
+Index("idx_ac_wc_status", WARRANTY_CLAIM.c.claim_status)
+
+# ==================================================================
+# PARTS DOMAIN
+# ==================================================================
+
+# ---------------------------------------------------------------------------
+# 12. automotiveclaw_part
+# ---------------------------------------------------------------------------
+PART = Table(
+    "automotiveclaw_part", METADATA,
+    Column("id", Text, primary_key=True, nullable=True),
+    Column("part_number", Text, nullable=False),
+    Column("description", Text),
+    Column("oem_number", Text),
+    Column("manufacturer", Text),
+    Column("list_price", Text),
+    Column("cost", Text),
+    Column("quantity_on_hand", Integer, server_default=text("0")),
+    Column("reorder_point", Integer, server_default=text("5")),
+    Column("bin_location", Text),
+    Column("is_active", Integer, server_default=text("1")),
+    Column("company_id", Text, ForeignKey("company.id"), nullable=False),
+    Column("created_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+    Column("updated_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+)
+
+Index("idx_ac_part_company", PART.c.company_id)
+Index("idx_ac_part_number", PART.c.part_number)
+
+# ---------------------------------------------------------------------------
+# 13. automotiveclaw_parts_order
+# ---------------------------------------------------------------------------
+PARTS_ORDER = Table(
+    "automotiveclaw_parts_order", METADATA,
+    Column("id", Text, primary_key=True, nullable=True),
+    Column("naming_series", Text),
+    Column("supplier_id", Text, ForeignKey("supplier.id"), nullable=False),
+    Column("order_date", Text),
+    Column("expected_date", Text),
+    Column("order_status", Text, server_default=text("'ordered'")),
+    Column("total_amount", Text),
+    Column("company_id", Text, ForeignKey("company.id"), nullable=False),
+    Column("created_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+    Column("updated_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+    CheckConstraint(
+        "order_status IN ('ordered','partial','received','cancelled')",
+        name="ck_automotiveclaw_parts_order_order_status"),
+)
+
+Index("idx_ac_po_company", PARTS_ORDER.c.company_id)
+Index("idx_ac_po_status", PARTS_ORDER.c.order_status)
+
+# ==================================================================
+# COMPLIANCE DOMAIN
+# ==================================================================
+
+# ---------------------------------------------------------------------------
+# 14. automotiveclaw_compliance_check
+# ---------------------------------------------------------------------------
+COMPLIANCE_CHECK = Table(
+    "automotiveclaw_compliance_check", METADATA,
+    Column("id", Text, primary_key=True, nullable=True),
+    Column("deal_id", Text, ForeignKey("automotiveclaw_deal.id")),
+    # NOT NULL with no default, unlike every other CHECKed column here: an
+    # OFAC/red-flag record has to say which check it is. Asymmetry preserved.
+    Column("check_type", Text, nullable=False),
+    Column("check_result", Text, server_default=text("'pending'")),
+    Column("checked_by", Text),
+    Column("check_date", Text),
+    Column("notes", Text),
+    Column("company_id", Text, ForeignKey("company.id"), nullable=False),
+    Column("created_at", Text, nullable=False,
+           server_default=text("CURRENT_TIMESTAMP")),
+    CheckConstraint(
+        "check_type IN ('ofac','red_flag','tila','odometer','buyers_guide')",
+        name="ck_automotiveclaw_compliance_check_check_type"),
+    CheckConstraint("check_result IN ('pass','fail','pending')",
+                    name="ck_automotiveclaw_compliance_check_check_result"),
+)
+
+Index("idx_ac_comp_deal", COMPLIANCE_CHECK.c.deal_id)
+Index("idx_ac_comp_type", COMPLIANCE_CHECK.c.check_type)
+
+
+def _require_foundation(db_path):
+    """The pre-conversion installer's foundation probe, asked through the seam.
+
+    The original read ``sqlite_master`` directly, so the guard that exists to
+    produce a friendly error was itself SQLite-only. ``seam.table_exists`` answers
+    on both backends (ADR-0034 bulk-39).
+    """
+    from erpclaw_lib import seam
+
+    missing = [t for t in REQUIRED_FOUNDATION if not seam.table_exists(t, db_path)]
     if missing:
         print(f"ERROR: Foundation tables missing: {', '.join(missing)}")
         print("Run erpclaw-setup first: clawhub install erpclaw-setup")
-        conn.close()
         sys.exit(1)
 
-    tables_created = 0
-    indexes_created = 0
 
-    # ==================================================================
-    # CUSTOMERS DOMAIN (extension table -- core fields live in customer)
-    # ==================================================================
+def create_automotiveclaw_tables(db_path=None):
+    """Create AutomotiveClaw tables and indexes on whichever backend is configured.
 
-    # 1. automotiveclaw_customer_ext
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS automotiveclaw_customer_ext (
-            id              TEXT PRIMARY KEY,
-            naming_series   TEXT DEFAULT 'ACUST-',
-            customer_id     TEXT NOT NULL REFERENCES customer(id),
-            drivers_license TEXT,
-            customer_type   TEXT DEFAULT 'individual'
-                            CHECK(customer_type IN ('individual','business','fleet')),
-            lead_source     TEXT DEFAULT 'walk_in'
-                            CHECK(lead_source IN ('walk_in','internet','phone','referral','repeat','other')),
-            company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    tables_created += 1
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_custext_company ON automotiveclaw_customer_ext(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_custext_customer ON automotiveclaw_customer_ext(customer_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_custext_type ON automotiveclaw_customer_ext(customer_type)")
-    indexes_created += 3
-
-    # ==================================================================
-    # INVENTORY DOMAIN
-    # ==================================================================
-
-    # 2. automotiveclaw_vehicle
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS automotiveclaw_vehicle (
-            id              TEXT PRIMARY KEY,
-            naming_series   TEXT,
-            vin             TEXT UNIQUE,
-            stock_number    TEXT,
-            year            INTEGER,
-            make            TEXT,
-            model           TEXT,
-            trim            TEXT,
-            color_exterior  TEXT,
-            color_interior  TEXT,
-            mileage         TEXT,
-            vehicle_condition TEXT DEFAULT 'new'
-                            CHECK(vehicle_condition IN ('new','used','cpo')),
-            body_style      TEXT,
-            engine          TEXT,
-            transmission    TEXT DEFAULT 'automatic'
-                            CHECK(transmission IN ('automatic','manual','cvt')),
-            drivetrain      TEXT DEFAULT 'fwd'
-                            CHECK(drivetrain IN ('fwd','rwd','awd','4wd')),
-            msrp            TEXT,
-            invoice_price   TEXT,
-            selling_price   TEXT,
-            internet_price  TEXT,
-            lot_location    TEXT,
-            days_in_stock   INTEGER DEFAULT 0,
-            vehicle_status  TEXT DEFAULT 'available'
-                            CHECK(vehicle_status IN ('available','hold','sold','traded','wholesale','transit')),
-            company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    tables_created += 1
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_veh_company ON automotiveclaw_vehicle(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_veh_vin ON automotiveclaw_vehicle(vin)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_veh_status ON automotiveclaw_vehicle(vehicle_status)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_veh_make ON automotiveclaw_vehicle(make)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_veh_condition ON automotiveclaw_vehicle(vehicle_condition)")
-    indexes_created += 5
-
-    # 3. automotiveclaw_vehicle_photo
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS automotiveclaw_vehicle_photo (
-            id              TEXT PRIMARY KEY,
-            vehicle_id      TEXT NOT NULL REFERENCES automotiveclaw_vehicle(id),
-            photo_url       TEXT,
-            photo_order     INTEGER DEFAULT 0,
-            caption         TEXT,
-            company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    tables_created += 1
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_vphoto_vehicle ON automotiveclaw_vehicle_photo(vehicle_id)")
-    indexes_created += 1
-
-    # 4. automotiveclaw_trade_in
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS automotiveclaw_trade_in (
-            id              TEXT PRIMARY KEY,
-            naming_series   TEXT,
-            vehicle_id      TEXT REFERENCES automotiveclaw_vehicle(id),
-            customer_id     TEXT REFERENCES customer(id),
-            vin             TEXT,
-            year            INTEGER,
-            make            TEXT,
-            model           TEXT,
-            mileage         TEXT,
-            trade_condition TEXT DEFAULT 'good'
-                            CHECK(trade_condition IN ('excellent','good','fair','poor')),
-            offered_amount  TEXT,
-            acv             TEXT,
-            payoff_amount   TEXT,
-            trade_status    TEXT DEFAULT 'pending'
-                            CHECK(trade_status IN ('pending','accepted','rejected')),
-            company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    tables_created += 1
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_trade_vehicle ON automotiveclaw_trade_in(vehicle_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_trade_customer ON automotiveclaw_trade_in(customer_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_trade_status ON automotiveclaw_trade_in(trade_status)")
-    indexes_created += 3
-
-    # ==================================================================
-    # DEALS DOMAIN
-    # ==================================================================
-
-    # 5. automotiveclaw_deal
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS automotiveclaw_deal (
-            id              TEXT PRIMARY KEY,
-            naming_series   TEXT,
-            vehicle_id      TEXT REFERENCES automotiveclaw_vehicle(id),
-            customer_id     TEXT REFERENCES customer(id),
-            salesperson     TEXT,
-            deal_type       TEXT DEFAULT 'retail'
-                            CHECK(deal_type IN ('retail','lease','wholesale','fleet')),
-            selling_price   TEXT,
-            trade_allowance TEXT,
-            trade_payoff    TEXT,
-            down_payment    TEXT,
-            rebates         TEXT,
-            front_gross     TEXT,
-            back_gross      TEXT,
-            total_gross     TEXT,
-            deal_status     TEXT DEFAULT 'pending'
-                            CHECK(deal_status IN ('pending','negotiating','submitted','approved','funded','delivered','unwound')),
-            delivered_date  TEXT,
-            gl_entry_ids    TEXT,
-            company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    tables_created += 1
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_deal_vehicle ON automotiveclaw_deal(vehicle_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_deal_customer ON automotiveclaw_deal(customer_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_deal_status ON automotiveclaw_deal(deal_status)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_deal_company ON automotiveclaw_deal(company_id)")
-    indexes_created += 4
-
-    # 6. automotiveclaw_buyer_order
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS automotiveclaw_buyer_order (
-            id              TEXT PRIMARY KEY,
-            deal_id         TEXT NOT NULL UNIQUE REFERENCES automotiveclaw_deal(id),
-            vehicle_price   TEXT,
-            trade_value     TEXT,
-            accessories     TEXT,
-            fees            TEXT,
-            subtotal        TEXT,
-            tax_amount      TEXT,
-            total           TEXT,
-            company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    tables_created += 1
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_bo_deal ON automotiveclaw_buyer_order(deal_id)")
-    indexes_created += 1
-
-    # ==================================================================
-    # F&I DOMAIN
-    # ==================================================================
-
-    # 7. automotiveclaw_fi_product
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS automotiveclaw_fi_product (
-            id              TEXT PRIMARY KEY,
-            name            TEXT NOT NULL,
-            product_type    TEXT DEFAULT 'warranty'
-                            CHECK(product_type IN ('warranty','gap','maintenance','tire_wheel','paint','theft','other')),
-            provider        TEXT,
-            base_cost       TEXT,
-            retail_price    TEXT,
-            max_markup      TEXT,
-            term_months     INTEGER,
-            is_active       INTEGER DEFAULT 1,
-            company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    tables_created += 1
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_fiprod_company ON automotiveclaw_fi_product(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_fiprod_type ON automotiveclaw_fi_product(product_type)")
-    indexes_created += 2
-
-    # 8. automotiveclaw_deal_fi_product
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS automotiveclaw_deal_fi_product (
-            id              TEXT PRIMARY KEY,
-            deal_id         TEXT NOT NULL REFERENCES automotiveclaw_deal(id),
-            fi_product_id   TEXT NOT NULL REFERENCES automotiveclaw_fi_product(id),
-            cost            TEXT,
-            selling_price   TEXT,
-            profit          TEXT,
-            term_months     INTEGER,
-            company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    tables_created += 1
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_dealfi_deal ON automotiveclaw_deal_fi_product(deal_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_dealfi_prod ON automotiveclaw_deal_fi_product(fi_product_id)")
-    indexes_created += 2
-
-    # ==================================================================
-    # SERVICE DOMAIN
-    # ==================================================================
-
-    # 9. automotiveclaw_repair_order
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS automotiveclaw_repair_order (
-            id              TEXT PRIMARY KEY,
-            naming_series   TEXT,
-            vehicle_vin     TEXT,
-            customer_id     TEXT REFERENCES customer(id),
-            advisor         TEXT,
-            technician      TEXT,
-            ro_type         TEXT DEFAULT 'customer_pay'
-                            CHECK(ro_type IN ('customer_pay','warranty','internal','recall')),
-            promised_date   TEXT,
-            ro_status       TEXT DEFAULT 'open'
-                            CHECK(ro_status IN ('open','in_progress','waiting_parts','completed','invoiced')),
-            labor_total     TEXT,
-            parts_total     TEXT,
-            total           TEXT,
-            company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    tables_created += 1
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_ro_customer ON automotiveclaw_repair_order(customer_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_ro_status ON automotiveclaw_repair_order(ro_status)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_ro_company ON automotiveclaw_repair_order(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_ro_vin ON automotiveclaw_repair_order(vehicle_vin)")
-    indexes_created += 4
-
-    # 10. automotiveclaw_service_line
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS automotiveclaw_service_line (
-            id              TEXT PRIMARY KEY,
-            repair_order_id TEXT NOT NULL REFERENCES automotiveclaw_repair_order(id),
-            line_type       TEXT DEFAULT 'labor'
-                            CHECK(line_type IN ('labor','parts','sublet','fee')),
-            description     TEXT,
-            quantity        TEXT,
-            rate            TEXT,
-            amount          TEXT,
-            technician      TEXT,
-            company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    tables_created += 1
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_svcline_ro ON automotiveclaw_service_line(repair_order_id)")
-    indexes_created += 1
-
-    # 11. automotiveclaw_warranty_claim
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS automotiveclaw_warranty_claim (
-            id              TEXT PRIMARY KEY,
-            naming_series   TEXT,
-            repair_order_id TEXT NOT NULL REFERENCES automotiveclaw_repair_order(id),
-            claim_number    TEXT,
-            claim_type      TEXT DEFAULT 'factory'
-                            CHECK(claim_type IN ('factory','extended','goodwill')),
-            labor_amount    TEXT,
-            parts_amount    TEXT,
-            total_amount    TEXT,
-            claim_status    TEXT DEFAULT 'submitted'
-                            CHECK(claim_status IN ('submitted','approved','rejected','paid')),
-            company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    tables_created += 1
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_wc_ro ON automotiveclaw_warranty_claim(repair_order_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_wc_status ON automotiveclaw_warranty_claim(claim_status)")
-    indexes_created += 2
-
-    # ==================================================================
-    # PARTS DOMAIN
-    # ==================================================================
-
-    # 12. automotiveclaw_part
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS automotiveclaw_part (
-            id              TEXT PRIMARY KEY,
-            part_number     TEXT NOT NULL,
-            description     TEXT,
-            oem_number      TEXT,
-            manufacturer    TEXT,
-            list_price      TEXT,
-            cost            TEXT,
-            quantity_on_hand INTEGER DEFAULT 0,
-            reorder_point   INTEGER DEFAULT 5,
-            bin_location    TEXT,
-            is_active       INTEGER DEFAULT 1,
-            company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    tables_created += 1
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_part_company ON automotiveclaw_part(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_part_number ON automotiveclaw_part(part_number)")
-    indexes_created += 2
-
-    # 13. automotiveclaw_parts_order
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS automotiveclaw_parts_order (
-            id              TEXT PRIMARY KEY,
-            naming_series   TEXT,
-            supplier_id     TEXT NOT NULL REFERENCES supplier(id),
-            order_date      TEXT,
-            expected_date   TEXT,
-            order_status    TEXT DEFAULT 'ordered'
-                            CHECK(order_status IN ('ordered','partial','received','cancelled')),
-            total_amount    TEXT,
-            company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    tables_created += 1
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_po_company ON automotiveclaw_parts_order(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_po_status ON automotiveclaw_parts_order(order_status)")
-    indexes_created += 2
-
-    # ==================================================================
-    # COMPLIANCE DOMAIN
-    # ==================================================================
-
-    # 14. automotiveclaw_compliance_check
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS automotiveclaw_compliance_check (
-            id              TEXT PRIMARY KEY,
-            deal_id         TEXT REFERENCES automotiveclaw_deal(id),
-            check_type      TEXT NOT NULL
-                            CHECK(check_type IN ('ofac','red_flag','tila','odometer','buyers_guide')),
-            check_result    TEXT DEFAULT 'pending'
-                            CHECK(check_result IN ('pass','fail','pending')),
-            checked_by      TEXT,
-            check_date      TEXT,
-            notes           TEXT,
-            company_id      TEXT NOT NULL REFERENCES company(id),
-            created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    tables_created += 1
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_comp_deal ON automotiveclaw_compliance_check(deal_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_ac_comp_type ON automotiveclaw_compliance_check(check_type)")
-    indexes_created += 2
-
-    conn.commit()
-    conn.close()
-
+    Same contract as before the ADR-0034 conversion: idempotent, and the returned
+    counts are what was ACTUALLY created rather than what was declared.
+    """
+    db_path = db_path or os.environ.get("ERPCLAW_DB_PATH", DEFAULT_DB_PATH)
+    _require_foundation(db_path)
+    result = provision(METADATA, db_path)
     return {
         "database": db_path,
-        "tables": tables_created,
-        "indexes": indexes_created,
+        "tables": result["tables"],
+        "indexes": result["indexes"],
     }
 
 
