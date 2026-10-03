@@ -12,6 +12,7 @@ Covers:
 import pytest
 import sys
 import os
+from decimal import Decimal
 
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _TESTS_DIR not in sys.path:
@@ -691,6 +692,20 @@ class TestCalculatePayment:
 # ── F&I Reports ──────────────────────────────────────────────────────────
 
 
+def _snapshot_fi_state(conn):
+    """Full dump of the F&I/deal rows plus the ledger entry count."""
+    tables = ("automotiveclaw_deal", "automotiveclaw_deal_fi_product",
+              "automotiveclaw_fi_product")
+    snapshot = {}
+    for table in tables:
+        rows = conn.execute(
+            f"SELECT * FROM {table} ORDER BY id").fetchall()
+        snapshot[table] = [dict(row) for row in rows]
+    snapshot["gl_entry_count"] = conn.execute(
+        "SELECT COUNT(*) FROM gl_entry").fetchone()[0]
+    return snapshot
+
+
 class TestFIReports:
     """auto-fi-penetration-report + auto-fi-income-report + auto-fi-product-performance"""
 
@@ -704,12 +719,140 @@ class TestFIReports:
         assert result["penetration_pct"] == 0.0
 
     def test_fi_income_report(self, conn, env):
+        # Behavioural (was shape-only: asserted only that "rows" exists, on
+        # an empty database). Seeds one F&I sale with exact money, reads the
+        # stored row back, and proves the report mirrors the stored row.
+        # NOTE: auto-fi-income-report is a read-only aggregate -- it never
+        # reaches the ledger, so no debit/credit legs exist to assert here.
+        product = call_action(
+            ACTIONS["auto-add-fi-product"], conn,
+            ns(company_id=env["company_id"], name="GAP Plus",
+               product_type="gap", base_cost="800.00",
+               retail_price="1995.00"),
+        )
+        assert is_ok(product), product
+        deal_id = seed_deal(
+            conn, env["vehicle_id"], env["core_customer_id"],
+            env["company_id"], selling_price="30000.00",
+        )
+        sale = call_action(
+            ACTIONS["auto-add-deal-fi-product"], conn,
+            ns(deal_id=deal_id, fi_product_id=product["id"],
+               company_id=env["company_id"], cost="800.00",
+               selling_price="1995.00"),
+        )
+        assert is_ok(sale), sale
+
+        stored = conn.execute(
+            "SELECT deal_id, cost, selling_price, profit "
+            "FROM automotiveclaw_deal_fi_product WHERE id = ?",
+            (sale["id"],),
+        ).fetchone()
+        assert stored is not None
+        assert Decimal(str(stored["cost"])) == Decimal("800.00")
+        assert Decimal(str(stored["selling_price"])) == Decimal("1995.00")
+        assert Decimal(str(stored["profit"])) == Decimal("1195.00")
+
         result = call_action(
             ACTIONS["auto-fi-income-report"], conn,
             ns(company_id=env["company_id"]),
         )
         assert is_ok(result), result
-        assert "rows" in result
+        assert result["count"] == 1
+        row = result["rows"][0]
+        assert row["deal_id"] == deal_id
+        assert row["product_name"] == "GAP Plus"
+        assert row["product_type"] == "gap"
+        assert row["cost"] == "800.00"
+        assert row["selling_price"] == "1995.00"
+        assert row["profit"] == "1195.00"
+        assert Decimal(str(row["cost"])) == Decimal(str(stored["cost"]))
+        assert Decimal(str(row["selling_price"])) == Decimal(
+            str(stored["selling_price"]))
+        assert Decimal(str(row["profit"])) == Decimal(str(stored["profit"]))
+
+        # The report has no deal_status filter, so F&I sold on a still-open
+        # deal is listed before delivery. That is the live behaviour, pinned
+        # here so a later status filter cannot sneak in unnoticed.
+        deal_status = conn.execute(
+            "SELECT deal_status FROM automotiveclaw_deal WHERE id = ?",
+            (deal_id,),
+        ).fetchone()["deal_status"]
+        assert deal_status == "pending"
+
+    def test_fi_income_report_is_read_only(self, conn, env):
+        # A report must change nothing: snapshot the owned tables and the
+        # ledger entry count, run the report, and require byte-identical state.
+        product = call_action(
+            ACTIONS["auto-add-fi-product"], conn,
+            ns(company_id=env["company_id"], name="GAP Readonly",
+               product_type="warranty", base_cost="500.00",
+               retail_price="1500.00"),
+        )
+        assert is_ok(product), product
+        deal_id = seed_deal(
+            conn, env["vehicle_id"], env["core_customer_id"],
+            env["company_id"], selling_price="30000.00",
+        )
+        sale = call_action(
+            ACTIONS["auto-add-deal-fi-product"], conn,
+            ns(deal_id=deal_id, fi_product_id=product["id"],
+               company_id=env["company_id"], cost="500.00",
+               selling_price="1500.00"),
+        )
+        assert is_ok(sale), sale
+
+        before = _snapshot_fi_state(conn)
+        result = call_action(
+            ACTIONS["auto-fi-income-report"], conn,
+            ns(company_id=env["company_id"]),
+        )
+        assert is_ok(result), result
+        assert result["count"] == 1
+        assert _snapshot_fi_state(conn) == before
+
+    def test_fi_income_report_refuses_unknown_company_without_writing(
+            self, conn, env):
+        # Refusal case: an unknown company is refused with a truthful message
+        # and the database is byte-identical afterwards. A refusal that
+        # half-writes is worse than no refusal.
+        product = call_action(
+            ACTIONS["auto-add-fi-product"], conn,
+            ns(company_id=env["company_id"], name="GAP Refusal",
+               product_type="gap", base_cost="800.00",
+               retail_price="1995.00"),
+        )
+        assert is_ok(product), product
+        deal_id = seed_deal(
+            conn, env["vehicle_id"], env["core_customer_id"],
+            env["company_id"], selling_price="30000.00",
+        )
+        sale = call_action(
+            ACTIONS["auto-add-deal-fi-product"], conn,
+            ns(deal_id=deal_id, fi_product_id=product["id"],
+               company_id=env["company_id"], cost="800.00",
+               selling_price="1995.00"),
+        )
+        assert is_ok(sale), sale
+
+        before = _snapshot_fi_state(conn)
+        result = call_action(
+            ACTIONS["auto-fi-income-report"], conn,
+            ns(company_id="no-such-company"),
+        )
+        assert is_error(result), result
+        assert "Company no-such-company not found" in (
+            result.get("message", "") + result.get("error", ""))
+        assert _snapshot_fi_state(conn) == before
+
+        missing = call_action(
+            ACTIONS["auto-fi-income-report"], conn,
+            ns(company_id=None),
+        )
+        assert is_error(missing), missing
+        assert "--company-id is required" in (
+            missing.get("message", "") + missing.get("error", ""))
+        assert _snapshot_fi_state(conn) == before
 
     def test_fi_product_performance(self, conn, env):
         call_action(

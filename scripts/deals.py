@@ -307,7 +307,10 @@ def finalize_deal(conn, args):
             (now, data["vehicle_id"])
         )
 
-    # --- GL Posting (optional — graceful degradation) ---
+    # --- GL Posting (optional: only when the accounts are supplied) ---
+    # When accounts are supplied the ledger is not optional: a posting failure
+    # rolls back the whole finalize and says why. Posts under the registered
+    # journal_entry voucher type, as the loans module does.
     gl_entry_ids = []
     gl_posted = False
     receivable_account_id = getattr(args, "receivable_account_id", None)
@@ -351,7 +354,7 @@ def finalize_deal(conn, args):
         try:
             gl_ids = insert_gl_entries(
                 conn, entries,
-                voucher_type="Vehicle Sale",
+                voucher_type="journal_entry",
                 voucher_id=deal_id,
                 posting_date=posting_date,
                 company_id=data["company_id"],
@@ -359,9 +362,9 @@ def finalize_deal(conn, args):
             )
             gl_entry_ids.extend(gl_ids)
             gl_posted = True
-        except (ValueError, Exception):
-            # GL posting failed — deal still closes, just without GL entries
-            pass
+        except Exception as e:
+            conn.rollback()
+            err(f"GL posting failed for vehicle sale {data.get('naming_series') or deal_id}: {e}")
 
         # Optional COGS entries (DR: COGS, CR: Inventory)
         # Uses the vehicle's invoice_price as cost basis
@@ -386,7 +389,7 @@ def finalize_deal(conn, args):
                     try:
                         cogs_ids = insert_gl_entries(
                             conn, cogs_entries,
-                            voucher_type="Vehicle Sale",
+                            voucher_type="journal_entry",
                             voucher_id=deal_id,
                             posting_date=posting_date,
                             company_id=data["company_id"],
@@ -394,9 +397,9 @@ def finalize_deal(conn, args):
                             entry_set="cogs",
                         )
                         gl_entry_ids.extend(cogs_ids)
-                    except (ValueError, Exception):
-                        # COGS posting failed — revenue GL still stands
-                        pass
+                    except Exception as e:
+                        conn.rollback()
+                        err(f"GL posting failed for vehicle sale COGS {data.get('naming_series') or deal_id}: {e}")
 
     # Store GL entry IDs on the deal
     if gl_entry_ids:
@@ -455,15 +458,15 @@ def unwind_deal(conn, args):
         try:
             rev_ids = reverse_gl_entries(
                 conn,
-                voucher_type="Vehicle Sale",
+                voucher_type="journal_entry",
                 voucher_id=deal_id,
                 posting_date=posting_date,
             )
             reversal_ids.extend(rev_ids)
             gl_reversed = True
-        except (ValueError, Exception):
-            # GL reversal failed — deal still unwinds
-            pass
+        except Exception as e:
+            conn.rollback()
+            err(f"GL reversal failed for deal {deal_id}: {e}")
 
         # Clear GL entry IDs on the deal
         conn.execute(
